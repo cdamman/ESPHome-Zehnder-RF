@@ -1,0 +1,50 @@
+# French strings (the default). Every user-facing label of vmc.yaml lives here, so
+# switching language is a one-line change and nothing has to be renamed by hand.
+#
+# These are also what Google Home announces: it forwards the names and the mode
+# labels verbatim, ignoring Home Assistant's own translations.
+#
+# Overriding a single string does not require editing this file -- set the same key
+# again in vmc.yaml's own substitutions, which take precedence.
+
+# Modes of the fan entity. The number is part of the label so Home Assistant and
+# Google Home list them in order.
+mode_off: "0 - Off"
+mode_low: "1 - Bas"
+mode_medium: "2 - Normal"
+mode_high: "3 - Fort"
+
+# Main entity
+name_fan: "Ventilation"
+
+# Boost
+name_boost: "Boost"
+name_boost_cancel: "Arrêter le boost"
+name_timer_duration: "Durée du timer"
+name_timer_remaining: "Timer restant"
+name_timer_active: "Timer actif"
+
+# Consumption
+name_power: "Consommation"
+name_energy_today: "Consommation du jour"
+name_airflow: "Débit"
+name_power_off: "Puissance 0 - Off"
+name_power_low: "Puissance 1 - Bas"
+name_power_medium: "Puissance 2 - Normal"
+name_power_high: "Puissance 3 - Fort"
+
+# Diagnostics
+name_restart: "Redémarrer"
+name_spi_healthy: "SPI radio OK"
+name_rf_channel_busy: "Canal RF occupé"
+name_rf_frames_received: "Trames RF reçues"
+name_rf_frames_sent: "Trames RF envoyées"
+name_rf_crc_errors: "Erreurs CRC RF"
+name_poll_success: "Taux de réponse du groupe"
+name_wifi_signal: "Signal WiFi"
+name_boot_time: "Démarré le"
+name_ip_address: "Adresse IP"
+name_esphome_version: "Version ESPHome"
+name_network_id: "ID réseau"
+name_main_unit_id: "ID groupe"
+name_remote_id: "ID télécommande"

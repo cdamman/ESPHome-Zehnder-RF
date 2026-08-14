@@ -1,0 +1,49 @@
+# English strings. Select them by pointing vmc.yaml's include at this file:
+#
+#   substitutions:
+#     <<: !include translations/en.yaml
+#
+# Overriding a single string does not require editing this file -- set the same key
+# again in vmc.yaml's own substitutions, which take precedence.
+
+# Modes of the fan entity. The number is part of the label so Home Assistant and
+# Google Home list them in order.
+mode_off: "0 - Off"
+mode_low: "1 - Low"
+mode_medium: "2 - Normal"
+mode_high: "3 - High"
+
+# Main entity
+name_fan: "Ventilation"
+
+# Boost
+name_boost: "Boost"
+name_boost_cancel: "Cancel boost"
+name_timer_duration: "Timer duration"
+name_timer_remaining: "Timer remaining"
+name_timer_active: "Timer running"
+
+# Consumption
+name_power: "Consumption"
+name_energy_today: "Consumption today"
+name_airflow: "Airflow"
+name_power_off: "Power 0 - Off"
+name_power_low: "Power 1 - Low"
+name_power_medium: "Power 2 - Normal"
+name_power_high: "Power 3 - High"
+
+# Diagnostics
+name_restart: "Restart"
+name_spi_healthy: "RF SPI healthy"
+name_rf_channel_busy: "RF channel busy"
+name_rf_frames_received: "RF frames received"
+name_rf_frames_sent: "RF frames sent"
+name_rf_crc_errors: "RF CRC errors"
+name_poll_success: "Unit response rate"
+name_wifi_signal: "WiFi signal"
+name_boot_time: "Boot time"
+name_ip_address: "IP address"
+name_esphome_version: "ESPHome version"
+name_network_id: "Network id"
+name_main_unit_id: "Unit id"
+name_remote_id: "Remote id"

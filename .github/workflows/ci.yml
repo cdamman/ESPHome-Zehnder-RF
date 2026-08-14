@@ -43,3 +43,44 @@ jobs:
 
       - name: Compile
         run: esphome compile ${{ matrix.config }}
+
+  translations:
+    name: Validate both language packs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install ESPHome (pinned)
+        run: pip install -r requirements.txt
+
+      # vmc.yaml reads credentials from secrets.yaml, which is not in the repo.
+      # `esphome config` only needs the keys to exist.
+      - name: Write a throwaway secrets.yaml
+        run: |
+          {
+            echo 'wifi_ssid: "ci"'
+            echo 'wifi_password: "ci-password"'
+            echo "esphome_vmc_api_key: \"$(head -c 32 /dev/urandom | base64 -w0)\""
+            echo 'esphome_vmc_ota_password: "ci-password"'
+            echo 'esphome_vmc_ap_password: "ci-password"'
+          } > secrets.yaml
+
+      # esphome only warns about an unresolved ${...} and keeps the literal text as
+      # the entity name, so the label check is its own script.
+      - name: Every language provides every label
+        run: python3 tests/check_translations.py
+
+      - name: Config is valid in French (the committed default)
+        run: esphome config vmc.yaml
+
+      - name: Config is valid in English
+        run: |
+          sed 's|translations/fr.yaml|translations/en.yaml|' vmc.yaml > vmc-en.yaml
+          esphome config vmc-en.yaml

@@ -8,8 +8,10 @@
 #   * the count-down of the running timer;
 #   * present and daily power consumption, at watts set from Home Assistant.
 #
-# Entity names and mode labels are kept in French on purpose: Google Home
-# forwards them as-is, ignoring Home Assistant's translations.
+# Labels come from translations/fr.yaml (French, the default) or
+# translations/en.yaml -- one include line below picks the language. They are what
+# Google Home announces: it forwards names and mode labels verbatim, ignoring Home
+# Assistant's own translations.
 #
 # The pins are exactly nRF905-API's Wemos D1 table, so a board already wired for
 # that firmware can be flashed with this one without rewiring:
@@ -33,6 +35,11 @@
 # Wi-Fi / API / OTA credentials come from secrets.yaml (see secrets.yaml.example).
 
 substitutions:
+  # Language of every label, including the mode names. Point this at
+  # translations/en.yaml for English; keys set below win over the file, so a single
+  # label can be overridden without editing it.
+  <<: !include translations/fr.yaml
+
   devicename: vmc
   upper_devicename: VMC
 
@@ -145,7 +152,7 @@ nrf905:
 fan:
   - platform: zehnder
     id: ${devicename}_fan
-    name: "Ventilation"
+    name: "${name_fan}"
     icon: mdi:hvac
     nrf905: nrf905_rf
     update_interval: "60s"
@@ -154,10 +161,10 @@ fan:
     # The modes as they show up in Home Assistant and Google Home. "0 - Off" is
     # what actually stops the unit: the entity's on/off is the boost.
     preset_modes:
-      "0 - Off": "off"
-      "1 - Bas": low
-      "2 - Normal": medium
-      "3 - Fort": high
+      "${mode_off}": "off"
+      "${mode_low}": low
+      "${mode_medium}": medium
+      "${mode_high}": high
     # The entity reads "on" at the boost speed; switching it off returns to
     # normal speed rather than stopping the unit.
     boost_speed: high
@@ -173,7 +180,7 @@ number:
   # The integration's "timer duration" number: 1 to 240 min, kept across
   # restarts, and pushed into the component on every change.
   - platform: template
-    name: "Durée du timer"
+    name: "${name_timer_duration}"
     id: ${devicename}_timer_minutes
     icon: mdi:timer-cog-outline
     entity_category: config
@@ -195,7 +202,7 @@ number:
   # Home Assistant (the integration had them in its options) rather than baked
   # into the firmware. Kept across restarts.
   - platform: template
-    name: "Puissance 0 - Off"
+    name: "${name_power_off}"
     id: ${devicename}_power_off
     icon: mdi:flash-outline
     entity_category: config
@@ -210,7 +217,7 @@ number:
     restore_value: true
 
   - platform: template
-    name: "Puissance 1 - Bas"
+    name: "${name_power_low}"
     id: ${devicename}_power_low
     icon: mdi:flash-outline
     entity_category: config
@@ -225,7 +232,7 @@ number:
     restore_value: true
 
   - platform: template
-    name: "Puissance 2 - Normal"
+    name: "${name_power_medium}"
     id: ${devicename}_power_medium
     icon: mdi:flash-outline
     entity_category: config
@@ -240,7 +247,7 @@ number:
     restore_value: true
 
   - platform: template
-    name: "Puissance 3 - Fort"
+    name: "${name_power_high}"
     id: ${devicename}_power_high
     icon: mdi:flash-outline
     entity_category: config
@@ -256,14 +263,14 @@ number:
 
 button:
   - platform: template
-    name: "Boost"
+    name: "${name_boost}"
     id: ${devicename}_boost
     icon: mdi:fan-plus
     on_press:
       - lambda: "id(${devicename}_fan)->startBoost(0);"  # 0 = configured duration
 
   - platform: template
-    name: "Arrêter le boost"
+    name: "${name_boost_cancel}"
     id: ${devicename}_boost_cancel
     icon: mdi:fan-off
     on_press:
@@ -271,12 +278,12 @@ button:
 
   - platform: restart
     id: ${devicename}_restart
-    name: "Redémarrer"
+    name: "${name_restart}"
     entity_category: config
 
 binary_sensor:
   - platform: template
-    name: "Timer actif"
+    name: "${name_timer_active}"
     id: ${devicename}_timer_active
     icon: mdi:timer-outline
     lambda: "return id(${devicename}_fan)->isTimerActive();"
@@ -284,7 +291,7 @@ binary_sensor:
   # Live nRF905 SPI health (idle probe + config readback on each TX).
   # ON = healthy; OFF = SPI wedged -> check the 3.3 V rail.
   - platform: template
-    name: "SPI radio OK"
+    name: "${name_spi_healthy}"
     device_class: connectivity
     entity_category: diagnostic
     lambda: "return id(nrf905_rf)->getLastConfigWriteOk();"
@@ -294,7 +301,7 @@ sensor:
   # never the time left: the count-down therefore starts from the duration that
   # was asked for, and clears as soon as the unit reports the timer is over.
   - platform: template
-    name: "Timer restant"
+    name: "${name_timer_remaining}"
     id: ${devicename}_timer_remaining
     icon: mdi:timer-sand
     device_class: duration
@@ -306,7 +313,7 @@ sensor:
   # Present consumption, derived from the speed and the figures configured above
   # (the unit does not measure it).
   - platform: template
-    name: "Consommation"
+    name: "${name_power}"
     id: ${devicename}_power
     device_class: power
     state_class: measurement
@@ -326,7 +333,7 @@ sensor:
 
   # Daily consumption, reset at local midnight.
   - platform: total_daily_energy
-    name: "Consommation du jour"
+    name: "${name_energy_today}"
     power_id: ${devicename}_power
     unit_of_measurement: kWh
     state_class: total_increasing
@@ -335,7 +342,7 @@ sensor:
 
   # Unit output in % (its 0-10 V control signal times ten), as it reports it.
   - platform: template
-    name: "Débit"
+    name: "${name_airflow}"
     icon: mdi:fan
     unit_of_measurement: "%"
     state_class: measurement
@@ -345,14 +352,14 @@ sensor:
 
   # --- RF diagnostics ------------------------------------------------------
   - platform: template
-    name: "Canal RF occupé"
+    name: "${name_rf_channel_busy}"
     unit_of_measurement: "%"
     accuracy_decimals: 1
     entity_category: diagnostic
     update_interval: 60s
     lambda: "return id(nrf905_rf)->getChannelBusyPercent();"
   - platform: template
-    name: "Trames RF reçues"
+    name: "${name_rf_frames_received}"
     unit_of_measurement: "frames"
     accuracy_decimals: 0
     entity_category: diagnostic
@@ -360,7 +367,7 @@ sensor:
     update_interval: 60s
     lambda: "return id(nrf905_rf)->getRxValidCount();"
   - platform: template
-    name: "Trames RF envoyées"
+    name: "${name_rf_frames_sent}"
     unit_of_measurement: "frames"
     accuracy_decimals: 0
     entity_category: diagnostic
@@ -368,7 +375,7 @@ sensor:
     update_interval: 60s
     lambda: "return id(nrf905_rf)->getTxCount();"
   - platform: template
-    name: "Erreurs CRC RF"
+    name: "${name_rf_crc_errors}"
     unit_of_measurement: "frames"
     accuracy_decimals: 0
     entity_category: diagnostic
@@ -376,7 +383,7 @@ sensor:
     update_interval: 60s
     lambda: "return id(nrf905_rf)->getRxInvalidCount();"
   - platform: template
-    name: "Taux de réponse du groupe"
+    name: "${name_poll_success}"
     unit_of_measurement: "%"
     accuracy_decimals: 1
     entity_category: diagnostic
@@ -384,29 +391,29 @@ sensor:
     lambda: "return id(${devicename}_fan)->getQuerySuccessPercent();"
 
   - platform: wifi_signal
-    name: "Signal WiFi"
+    name: "${name_wifi_signal}"
     entity_category: diagnostic
     update_interval: 60s
   - platform: uptime
     type: timestamp
-    name: "Démarré le"
+    name: "${name_boot_time}"
     entity_category: diagnostic
 
 text_sensor:
   - platform: wifi_info
     ip_address:
-      name: "Adresse IP"
+      name: "${name_ip_address}"
       icon: mdi:ip-network
       entity_category: diagnostic
   - platform: version
-    name: "Version ESPHome"
+    name: "${name_esphome_version}"
     entity_category: diagnostic
     hide_timestamp: true
 
   # Current pairing identity (from flash, discovery or the YAML pin), visible
   # without having to read the logs.
   - platform: template
-    name: "ID réseau"
+    name: "${name_network_id}"
     entity_category: diagnostic
     update_interval: 60s
     lambda: |-
@@ -414,7 +421,7 @@ text_sensor:
       snprintf(buf, sizeof(buf), "0x%08X", id(${devicename}_fan)->getNetworkId());
       return std::string(buf);
   - platform: template
-    name: "ID groupe"
+    name: "${name_main_unit_id}"
     entity_category: diagnostic
     update_interval: 60s
     lambda: |-
@@ -422,7 +429,7 @@ text_sensor:
       snprintf(buf, sizeof(buf), "0x%02X", id(${devicename}_fan)->getMainUnitId());
       return std::string(buf);
   - platform: template
-    name: "ID télécommande"
+    name: "${name_remote_id}"
     entity_category: diagnostic
     update_interval: 60s
     lambda: |-

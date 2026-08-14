@@ -20,12 +20,46 @@ integration, which goes through the
 | `number` **Puissance 0-3** | Watts drawn in each mode, set from Home Assistant and kept across restarts |
 | `sensor` **Débit** | Unit output in %, as the unit reports it |
 
-Entity names and mode labels are French on purpose: Google Home forwards them
-verbatim and ignores Home Assistant's translations. Everything else — code,
-comments, commits — is English.
+Every label — entity names and mode names alike — comes from a language file, so
+the language is a one-line choice (see [Language](#language)). French is the
+default. Code, comments and commits are English.
 
 Changes made from a physical remote show up immediately: the radio listens
 continuously and also decodes the frames addressed to the unit.
+
+## Language
+
+All user-facing strings live in `translations/`, and `vmc.yaml` pulls one file in:
+
+```yaml
+substitutions:
+  <<: !include translations/fr.yaml   # French, the default
+  # <<: !include translations/en.yaml # English
+```
+
+`fr.yaml` and `en.yaml` hold the same keys: the entity names and the four mode
+labels. Switch the include, reflash, done. This is not cosmetic for Google Home:
+it forwards these names and mode labels verbatim and ignores Home Assistant's own
+translations, which is why they have to be right in the firmware.
+
+To change a single label without editing a language file, set the same key again
+in `vmc.yaml`'s own `substitutions` — keys there win over the included file:
+
+```yaml
+substitutions:
+  <<: !include translations/fr.yaml
+  name_fan: "VMC salon"
+```
+
+Adding a language means copying a file and translating its values.
+`tests/check_translations.py` (run by CI, and runnable locally) checks that every
+language provides every label: ESPHome only warns about an unresolved `${...}` and
+would happily ship `${name_airflow}` as an entity name, so that check is what keeps
+a half-translated file from reaching your board.
+
+Note that renaming a mode changes the options Home Assistant offers for the fan:
+after a language switch, automations or scripts that select a mode by name need
+the new spelling.
 
 ## On/off is the boost, not a stop button
 
@@ -170,7 +204,11 @@ python3 -m venv .venv
 
 CI compiles `tests/ci-esp8266.yaml` and `tests/ci.yaml` — the same entities on the
 ESP8266 and on the ESP32 — so the component and the boost/timer API stay building
-for both.
+for both, and validates `vmc.yaml` in every language:
+
+```bash
+python3 tests/check_translations.py
+```
 
 ## Origin
 
