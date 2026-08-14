@@ -2,6 +2,7 @@
 #define __COMPONENT_ZEHNDER_H__
 
 #include <string>
+#include <vector>
 
 #include "esphome/core/component.h"
 #include "esphome/core/hal.h"
@@ -43,18 +44,39 @@ enum {
   FAN_FRAME_SETVOLTAGE_REPLY = 0x1D
 };
 
-/* Fan speed presets */
+/* Fan speed presets of the protocol */
 enum {
   FAN_SPEED_AUTO = 0x00,    // Off:      0% or  0.0 volt
   FAN_SPEED_LOW = 0x01,     // Low:     30% or  3.0 volt
   FAN_SPEED_MEDIUM = 0x02,  // Medium:  50% or  5.0 volt
   FAN_SPEED_HIGH = 0x03,    // High:    90% or  9.0 volt
-  FAN_SPEED_MAX = 0x04
-};  // Max:    100% or 10.0 volt
+  FAN_SPEED_MAX = 0x04      // Max:    100% or 10.0 volt -- not used, see below
+};
+
+/* Highest speed this component will ask for. The protocol defines a fourth preset
+   (FAN_SPEED_MAX) but it is deliberately out of reach: the config schema refuses
+   it, and setSpeed() clamps to this, so nothing here ever sends it. A unit that
+   reports speed 4 (someone pressed max on a physical remote) is still reported
+   faithfully -- it simply matches no named mode. */
+#define FAN_SPEED_COUNT 3
 
 #define NETWORK_LINK_ID 0xA55A5AA5
 #define NETWORK_DEFAULT_ID 0xE7E7E7E7
 #define FAN_JOIN_DEFAULT_TIMEOUT 10000
+
+/* nRF905 channel per fan family (band = 1, so f = 2 * (422.4 + channel / 10) MHz) */
+#define FAN_CHANNEL_ZEHNDER 118  // 868.400 MHz
+#define FAN_CHANNEL_BUVA 117     // 868.200 MHz
+
+/* Bounds of the boost timer, in minutes. The RF payload carries it in one byte
+   and the unit ignores 0 (that is the "no timer" encoding). */
+#define FAN_TIMER_MIN_MINUTES 1
+#define FAN_TIMER_MAX_MINUTES 240
+
+/* Flags byte of a FAN_SETTINGS frame (byte 0x09). The unit only tells us
+   *whether* a timer is running, never how long is left -- eelcohn's nRF905-API
+   reads the same byte as `(flags & 0x01)` for its `timer` field. */
+#define FAN_SETTINGS_FLAG_TIMER 0x01
 
 typedef enum { ResultOk, ResultBusy, ResultFailure } Result;
 
@@ -87,6 +109,37 @@ class ZehnderRF : public Component, public fan::Fan {
   // dead and the device auto re-pairs (discovery). 0 disables. Default 10.
   void set_self_heal_threshold(uint32_t n) { this->self_heal_threshold_ = n; }
 
+  // nRF905 channel: 118 for Zehnder (868.400 MHz), 117 for BUVA (868.200 MHz).
+  void set_channel(uint8_t channel) { this->channel_ = channel; }
+
+  // Register a named mode ("preset") and the fan speed it maps to, speed 0
+  // included -- a mode is the only way to stop the unit, since the entity's
+  // on/off drives the boost instead. Called once per entry from codegen; `name`
+  // is a string literal, so the pointer stays valid for the lifetime of the
+  // program (which is what fan::Fan stores internally).
+  void add_preset(const char *name, uint8_t speed);
+
+  // Speed the boost runs at -- also the speed at which the entity reads "on".
+  void set_boost_speed(uint8_t speed) { this->boost_speed_ = speed; }
+
+  // Where the boost returns to when the mode it started from is not known: after a
+  // reboot mid-boost, or from a speed no mode is mapped to. Ending a boost normally
+  // goes back to whatever was running before it started, not to this.
+  void set_revert_speed(uint8_t speed) { this->revert_speed_ = speed; }
+
+  // Boost duration in minutes, used by startBoost() when it is called without
+  // an explicit duration. Kept settable at runtime so a `number` entity can own
+  // it (that is the "timer duration" control in Home Assistant).
+  void set_timer_minutes(uint8_t minutes);
+  uint8_t get_timer_minutes(void) const { return this->timer_minutes_; }
+
+  // Run at the boost speed for `minutes` (0 = the configured duration); the fan
+  // itself reverts when the timer runs out. cancelBoost() ends it early, going back
+  // to the speed that was running when the boost started -- or to revert_speed_ if
+  // that is not known.
+  void startBoost(uint8_t minutes = 0);
+  void cancelBoost(void);
+
   void dump_config() override;
 
   fan::FanTraits get_traits() override;
@@ -106,6 +159,20 @@ class ZehnderRF : public Component, public fan::Fan {
   // unit then registers this device's id so it will answer our queries/commands.
   void startPairing(void);
 
+  // --- Boost timer state, for the countdown sensor -------------------------
+  // The fan only reports *that* a timer is running (one flag bit), never how
+  // long is left. So the count-down is ours: it starts from a duration we know
+  // (the boost we sent, or a timer command overheard from another remote) and
+  // otherwise from the configured duration when the flag rises on its own.
+  bool isTimerActive(void) const { return this->timer_window_active_; }
+  float getTimerRemainingMinutes(void) const;  // NAN while no timer is running
+  bool isDeviceTimerFlagSet(void) const { return (this->fan_flags_ & FAN_SETTINGS_FLAG_TIMER) != 0; }
+  uint8_t getFanFlags(void) const { return this->fan_flags_; }  // diagnostic, bit 0 = timer
+
+  // Fan output as the percentage the unit reports (0-100, i.e. its 0-10 V
+  // control signal times ten). NAN until the first FAN_SETTINGS frame arrives.
+  float getFanPercentage(void) const;
+
   // Debug/diagnostic: poll (query) link reliability.
   uint32_t getQueryAttemptCount(void) const { return this->queryAttempts_; }
   uint32_t getQuerySuccessCount(void) const { return this->querySuccesses_; }
@@ -124,6 +191,41 @@ class ZehnderRF : public Component, public fan::Fan {
 
  protected:
   void queryDevice(void);
+
+  // --- Named modes (presets) ------------------------------------------------
+  typedef struct {
+    const char *name;
+    uint8_t speed;
+  } Preset;
+  std::vector<Preset> presets_;
+  const char *presetForSpeed_(uint8_t speed) const;  // nullptr when unmapped
+  int speedForPreset_(const char *name) const;       // -1 when unknown (0 is a valid mode)
+
+  // Publish speed + on/off + the matching named mode in one go, so Home Assistant
+  // always sees a mode that agrees with the speed. on/off follows the boost.
+  void publishFanState_(uint8_t speed);
+
+  // --- Boost timer bookkeeping ---------------------------------------------
+  void updateTimerFromDevice_(uint8_t flags);  // flags byte of a FAN_SETTINGS frame
+  void seedTimerWindow_(uint8_t minutes);      // from a timer command we sent/overheard
+  void clearTimerWindow_(void);
+
+  uint8_t channel_{FAN_CHANNEL_ZEHNDER};
+  uint8_t boost_speed_{FAN_SPEED_HIGH};
+  uint8_t revert_speed_{FAN_SPEED_MEDIUM};
+  uint8_t timer_minutes_{30};
+
+  // Speed the fan was running at when the boost started, so ending the boost puts
+  // it back where it was instead of at a speed fixed in the config. Forgotten with
+  // the timer window, which also covers the fan's own timer expiring.
+  uint8_t pre_boost_speed_{0};
+  bool has_pre_boost_speed_{false};
+
+  uint8_t fan_flags_{0};    // flags byte of the last FAN_SETTINGS frame
+  uint8_t fan_voltage_{0};  // percentage byte of the last FAN_SETTINGS frame
+  bool have_fan_settings_{false};
+  bool timer_window_active_{false};
+  uint32_t timer_end_ms_{0};
 
   uint8_t createDeviceID(void);
   void discoveryStart(const uint8_t deviceId);

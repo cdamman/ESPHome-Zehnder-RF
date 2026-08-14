@@ -1,3 +1,6 @@
+#include <cmath>
+#include <cstring>
+
 #include "zehnder.h"
 #include "esphome/core/log.h"
 #include "esphome/core/application.h"
@@ -22,9 +25,9 @@ typedef struct __attribute__((packed)) {
 } RfPayloadNetworkJoinAck;
 
 typedef struct __attribute__((packed)) {
-  uint8_t speed;
-  uint8_t voltage;
-  uint8_t timer;
+  uint8_t speed;    // 0x07 current speed preset
+  uint8_t voltage;  // 0x08 output as a percentage (30 = 30% = 3.0 V)
+  uint8_t flags;    // 0x09 status bits; bit 0 = a timer is running
 } RfPayloadFanSettings;
 
 typedef struct __attribute__((packed)) {
@@ -58,22 +61,88 @@ typedef struct __attribute__((packed)) {
 
 ZehnderRF::ZehnderRF(void) {}
 
-fan::FanTraits ZehnderRF::get_traits() { return fan::FanTraits(false, true, false, this->speed_count_); }
+fan::FanTraits ZehnderRF::get_traits() {
+  // No speed support: a unit with three fixed speeds has nothing to slide, so Home
+  // Assistant gets the on/off (the boost) and the named modes, and no percentage.
+  // speed_count_ still bounds what setSpeed() will send.
+  fan::FanTraits traits(false, false, false, this->speed_count_);
+  // Hand the named modes registered from YAML to the traits object, so the API /
+  // Home Assistant offers them and FanCall can validate an incoming preset.
+  this->wire_preset_modes_(traits);
+  return traits;
+}
+
+void ZehnderRF::add_preset(const char *name, const uint8_t speed) {
+  this->presets_.push_back(Preset{name, speed});
+}
+
+const char *ZehnderRF::presetForSpeed_(const uint8_t speed) const {
+  for (const auto &preset : this->presets_) {
+    if (preset.speed == speed) {
+      return preset.name;
+    }
+  }
+  return nullptr;
+}
+
+int ZehnderRF::speedForPreset_(const char *const name) const {
+  if (name == nullptr) {
+    return -1;
+  }
+  for (const auto &preset : this->presets_) {
+    if (strcmp(preset.name, name) == 0) {
+      return (int) preset.speed;
+    }
+  }
+  return -1;  // unknown mode -- speed 0 is a valid mode, so it cannot mean this
+}
+
+void ZehnderRF::publishFanState_(const uint8_t speed) {
+  this->speed = speed;
+  // The entity's on/off *is* the boost, so it reads on only while the fan runs
+  // at the boost speed. Stopping the unit is a mode, not the off switch.
+  this->state = (speed == this->boost_speed_);
+  // Keep the reported mode in step with the speed, including for changes made
+  // from a physical remote. A speed with no matching entry clears the mode.
+  this->set_preset_mode_(this->presetForSpeed_(speed));
+  this->publish_state();
+}
 
 void ZehnderRF::control(const fan::FanCall &call) {
-  if (call.get_state().has_value()) {
-    this->state = *call.get_state();
-    ESP_LOGD(TAG, "Control has state: %u", this->state);
+  // A plain on/off command drives the boost: on -> boost speed with the timer,
+  // off -> back to the fall-back speed. Turning the unit off entirely is a mode
+  // of its own (speed 0), never the off command -- a ventilation unit that stops
+  // because someone tapped a toggle is not what anyone wants.
+  if (call.get_state().has_value() && !call.has_preset_mode() && !call.get_speed().has_value()) {
+    ESP_LOGD(TAG, "Control has state: %u -> boost %s", *call.get_state(), *call.get_state() ? "on" : "off");
+    if (*call.get_state()) {
+      this->startBoost(0);
+    } else {
+      this->cancelBoost();
+    }
+    return;
   }
+
+  uint8_t speed = (uint8_t) this->speed;
+
   if (call.get_speed().has_value()) {
-    this->speed = *call.get_speed();
-    ESP_LOGD(TAG, "Control has speed: %u", this->speed);
+    speed = (uint8_t) *call.get_speed();
+    ESP_LOGD(TAG, "Control has speed: %u", speed);
+  }
+  // A named mode selects the speed it is mapped to. FanCall has already checked
+  // the name against the traits.
+  if (call.has_preset_mode()) {
+    const int presetSpeed = this->speedForPreset_(call.get_preset_mode());
+    if (presetSpeed >= 0) {
+      speed = (uint8_t) presetSpeed;
+      ESP_LOGD(TAG, "Control has mode: %s -> speed %u", call.get_preset_mode(), speed);
+    }
   }
 
   switch (this->state_) {
     case StateIdle:
-      // Set speed
-      this->setSpeed(this->state ? this->speed : 0x00, 0);
+      // Set speed, without a timer: picking a mode is not a boost.
+      this->setSpeed(speed, 0);
 
       this->lastFanQuery_ = millis();  // Update time
       break;
@@ -82,7 +151,9 @@ void ZehnderRF::control(const fan::FanCall &call) {
       break;
   }
 
-  this->publish_state();
+  // On this unit a speed *is* a mode, so report the mode that goes with the
+  // speed even when the request came in as a plain speed.
+  this->publishFanState_(speed);
 }
 
 void ZehnderRF::setup() {
@@ -106,7 +177,7 @@ void ZehnderRF::setup() {
   rfConfig = this->rf_->getConfig();
 
   rfConfig.band = true;
-  rfConfig.channel = 118;
+  rfConfig.channel = this->channel_;  // 118 = Zehnder (868.400 MHz), 117 = BUVA (868.200 MHz)
 
   // // CRC 16
   rfConfig.crc_enable = true;
@@ -133,7 +204,18 @@ void ZehnderRF::setup() {
   this->rf_->updateConfig(&rfConfig);
   this->rf_->writeTxAddress(0x89816EA9);
 
-  this->speed_count_ = 4;
+  this->speed_count_ = FAN_SPEED_COUNT;
+
+  // Publish the named modes registered from YAML. The names are string literals
+  // from codegen, so handing out the pointers is safe.
+  if (!this->presets_.empty()) {
+    std::vector<const char *> names;
+    names.reserve(this->presets_.size());
+    for (const auto &preset : this->presets_) {
+      names.push_back(preset.name);
+    }
+    this->set_supported_preset_modes(names);
+  }
 
   this->rf_->setOnTxReady([this](void) {
     ESP_LOGD(TAG, "Tx Ready");
@@ -156,6 +238,14 @@ void ZehnderRF::setup() {
 void ZehnderRF::dump_config(void) {
   ESP_LOGCONFIG(TAG, "Zehnder Fan config:");
   ESP_LOGCONFIG(TAG, "  Polling interval   %u", this->interval_);
+  ESP_LOGCONFIG(TAG, "  RF channel         %u (%.3f MHz)", this->channel_,
+                2.0f * (422.4f + (this->channel_ / 10.0f)));
+  ESP_LOGCONFIG(TAG, "  Boost speed        %u, falls back to %u when the pre-boost speed is unknown",
+                this->boost_speed_, this->revert_speed_);
+  ESP_LOGCONFIG(TAG, "  Boost duration     %u minutes", this->timer_minutes_);
+  for (const auto &preset : this->presets_) {
+    ESP_LOGCONFIG(TAG, "  Mode               '%s' -> speed %u", preset.name, preset.speed);
+  }
   ESP_LOGCONFIG(TAG, "  Fan networkId      0x%08X", this->config_.fan_networkId);
   ESP_LOGCONFIG(TAG, "  Fan my device type 0x%02X", this->config_.fan_my_device_type);
   ESP_LOGCONFIG(TAG, "  Fan my device id   0x%02X", this->config_.fan_my_device_id);
@@ -457,9 +547,9 @@ void ZehnderRF::rfHandleReceived(const uint8_t *const pData, const uint8_t dataL
           (pResponse->rx_id == this->config_.fan_my_device_id)) {      // and id match, it is for us
         switch (pResponse->command) {
           case FAN_TYPE_FAN_SETTINGS:
-            ESP_LOGD(TAG, "Received fan settings; speed: 0x%02X voltage: %i timer: %i",
+            ESP_LOGD(TAG, "Received fan settings; speed: 0x%02X voltage: %i flags: 0x%02X",
                      pResponse->payload.fanSettings.speed, pResponse->payload.fanSettings.voltage,
-                     pResponse->payload.fanSettings.timer);
+                     pResponse->payload.fanSettings.flags);
 
             ++this->querySuccesses_;  // diagnostic: poll got a valid response
 
@@ -473,9 +563,10 @@ void ZehnderRF::rfHandleReceived(const uint8_t *const pData, const uint8_t dataL
 
             this->rfComplete();
 
-            this->state = pResponse->payload.fanSettings.speed > 0;
-            this->speed = pResponse->payload.fanSettings.speed;
-            this->publish_state();
+            this->fan_voltage_ = pResponse->payload.fanSettings.voltage;
+            this->have_fan_settings_ = true;
+            this->updateTimerFromDevice_(pResponse->payload.fanSettings.flags);
+            this->publishFanState_(pResponse->payload.fanSettings.speed);
 
             this->state_ = StateIdle;
             break;
@@ -496,12 +587,18 @@ void ZehnderRF::rfHandleReceived(const uint8_t *const pData, const uint8_t dataL
           (pResponse->rx_id == this->config_.fan_my_device_id)) {      // and id match, it is for us
         switch (pResponse->command) {
           case FAN_TYPE_FAN_SETTINGS:
-            ESP_LOGD(TAG, "Received fan settings; speed: 0x%02X voltage: %i timer: %i",
+            ESP_LOGD(TAG, "Received fan settings; speed: 0x%02X voltage: %i flags: 0x%02X",
                      pResponse->payload.fanSettings.speed, pResponse->payload.fanSettings.voltage,
-                     pResponse->payload.fanSettings.timer);
+                     pResponse->payload.fanSettings.flags);
             this->rfComplete();
 
-            this->rfComplete();
+            // Fresh reading straight after our own command: keep the timer and
+            // voltage, but leave the published speed to the optimistic value
+            // control()/startBoost() already sent -- some units answer with the
+            // speed they had *before* applying the command.
+            this->fan_voltage_ = pResponse->payload.fanSettings.voltage;
+            this->have_fan_settings_ = true;
+            this->updateTimerFromDevice_(pResponse->payload.fanSettings.flags);
 
             (void) memset(this->_txFrame, 0, FAN_FRAMESIZE);  // Clear frame data
 
@@ -551,16 +648,18 @@ void ZehnderRF::rfHandleReceived(const uint8_t *const pData, const uint8_t dataL
         switch (pResponse->command) {
           case FAN_TYPE_FAN_SETTINGS: {
             const uint8_t fanSpeed = pResponse->payload.fanSettings.speed;
-            ESP_LOGD(TAG, "Unsolicited fan settings; speed: 0x%02X voltage: %i timer: %i", fanSpeed,
-                     pResponse->payload.fanSettings.voltage, pResponse->payload.fanSettings.timer);
+            ESP_LOGD(TAG, "Unsolicited fan settings; speed: 0x%02X voltage: %i flags: 0x%02X", fanSpeed,
+                     pResponse->payload.fanSettings.voltage, pResponse->payload.fanSettings.flags);
+
+            this->fan_voltage_ = pResponse->payload.fanSettings.voltage;
+            this->have_fan_settings_ = true;
+            this->updateTimerFromDevice_(pResponse->payload.fanSettings.flags);
 
             // Only publish on an actual change; mesh re-broadcasts repeat the
-            // same values and would otherwise spam Home Assistant.
-            const bool fanState = fanSpeed > 0;
-            if ((this->state != fanState) || (this->speed != fanSpeed)) {
-              this->state = fanState;
-              this->speed = fanSpeed;
-              this->publish_state();
+            // same values and would otherwise spam Home Assistant. on/off and
+            // the mode both follow the speed, so the speed is the whole test.
+            if (this->speed != fanSpeed) {
+              this->publishFanState_(fanSpeed);
             }
             break;
           }
@@ -582,9 +681,13 @@ void ZehnderRF::rfHandleReceived(const uint8_t *const pData, const uint8_t dataL
         switch (pResponse->command) {
           case FAN_FRAME_SETSPEED:  // 0x02: payload = { speed }
             requestedSpeed = pResponse->payload.setSpeed.speed;
+            this->clearTimerWindow_();  // a plain speed command ends any timer
             break;
           case FAN_FRAME_SETTIMER:  // 0x03: payload = { speed, timer }
             requestedSpeed = pResponse->payload.setTimer.speed;
+            // A boost started from a physical remote: start the countdown from
+            // the duration that remote asked for, so the sensor tracks it too.
+            this->seedTimerWindow_(pResponse->payload.setTimer.timer);
             break;
           default:
             // e.g. SETVOLTAGE (a raw percentage, not a preset) or other
@@ -599,11 +702,8 @@ void ZehnderRF::rfHandleReceived(const uint8_t *const pData, const uint8_t dataL
 
           // Only publish on an actual change; mesh re-broadcasts repeat the same
           // command and would otherwise spam Home Assistant.
-          const bool fanState = requestedSpeed > 0;
-          if ((this->state != fanState) || (this->speed != requestedSpeed)) {
-            this->state = fanState;
-            this->speed = requestedSpeed;
-            this->publish_state();
+          if (this->speed != requestedSpeed) {
+            this->publishFanState_(requestedSpeed);
           }
         }
       }
@@ -767,6 +867,15 @@ void ZehnderRF::setSpeed(const uint8_t paramSpeed, const uint8_t paramTimer) {
 
   ESP_LOGD(TAG, "Set speed: 0x%02X; Timer %u minutes", speed, timer);
 
+  // Track the boost window from the command itself, so the countdown starts at
+  // once instead of waiting for the fan to confirm on the next poll. A poll that
+  // reports no timer clears it again, so a command the fan ignored self-corrects.
+  if (timer != 0) {
+    this->seedTimerWindow_(timer);
+  } else {
+    this->clearTimerWindow_();
+  }
+
   if (this->state_ == StateIdle) {
     (void) memset(this->_txFrame, 0, FAN_FRAMESIZE);  // Clear frame data
 
@@ -801,6 +910,106 @@ void ZehnderRF::setSpeed(const uint8_t paramSpeed, const uint8_t paramTimer) {
     newTimer = timer;
     newSetting = true;
   }
+}
+
+void ZehnderRF::set_timer_minutes(const uint8_t minutes) {
+  this->timer_minutes_ = minmax(minutes, FAN_TIMER_MIN_MINUTES, FAN_TIMER_MAX_MINUTES);
+  ESP_LOGD(TAG, "Boost duration set to %u minutes", this->timer_minutes_);
+}
+
+void ZehnderRF::startBoost(const uint8_t paramMinutes) {
+  const uint8_t minutes = (paramMinutes == 0) ? this->timer_minutes_ : paramMinutes;
+
+  // Remember where to come back to, but only when a boost is not already running:
+  // boosting again must not overwrite the memory with the boost speed itself. And
+  // only when the current speed is actually known -- before the first reply from
+  // the fan it reads 0, and coming back to 0 would stop the unit rather than
+  // restore it.
+  const bool speed_is_known = this->have_fan_settings_ || (this->speed > 0);
+  if (!this->timer_window_active_ && speed_is_known) {
+    this->pre_boost_speed_ = (uint8_t) this->speed;
+    this->has_pre_boost_speed_ = true;
+  }
+
+  if (this->has_pre_boost_speed_) {
+    ESP_LOGI(TAG, "Boost: speed %u for %u minutes (will return to speed %u)", this->boost_speed_, minutes,
+             this->pre_boost_speed_);
+  } else {
+    ESP_LOGI(TAG, "Boost: speed %u for %u minutes (current speed unknown, will fall back to speed %u)",
+             this->boost_speed_, minutes, this->revert_speed_);
+  }
+  this->setSpeed(this->boost_speed_, minutes);
+  // Show the boost right away; the next poll reconciles with the fan.
+  this->publishFanState_(this->boost_speed_);
+}
+
+void ZehnderRF::cancelBoost(void) {
+  // Back to the speed the boost started from. The configured fall-back only steps
+  // in when that is unknown -- after a reboot mid-boost, say.
+  const uint8_t target = this->has_pre_boost_speed_ ? this->pre_boost_speed_ : this->revert_speed_;
+
+  ESP_LOGI(TAG, "Boost cancelled: back to speed %u (%s)", target,
+           this->has_pre_boost_speed_ ? "where it was" : "configured fall-back");
+  this->setSpeed(target, 0);  // clears the timer window, and the memory with it
+  this->publishFanState_(target);
+}
+
+void ZehnderRF::seedTimerWindow_(const uint8_t minutes) {
+  if (minutes == 0) {
+    this->clearTimerWindow_();
+    return;
+  }
+  this->timer_end_ms_ = millis() + ((uint32_t) minutes * 60000UL);
+  this->timer_window_active_ = true;
+}
+
+void ZehnderRF::clearTimerWindow_(void) {
+  this->timer_window_active_ = false;
+  this->timer_end_ms_ = 0;
+  // No boost running means nothing to come back to.
+  this->has_pre_boost_speed_ = false;
+}
+
+void ZehnderRF::updateTimerFromDevice_(const uint8_t flags) {
+  this->fan_flags_ = flags;
+
+  if ((flags & FAN_SETTINGS_FLAG_TIMER) == 0) {
+    // No timer running any more -- either it expired or something cancelled it.
+    if (this->timer_window_active_) {
+      ESP_LOGD(TAG, "Fan reports no timer running, clearing the count-down");
+    }
+    this->clearTimerWindow_();
+    return;
+  }
+
+  // A timer is running. When we have no window yet the boost was started
+  // elsewhere (a remote whose command we did not overhear, or before a reboot),
+  // so fall back to the configured duration -- the best guess available, since
+  // the unit never reports the time left.
+  if (!this->timer_window_active_) {
+    ESP_LOGD(TAG, "Fan reports a running timer we did not start, assuming %u minutes", this->timer_minutes_);
+    this->seedTimerWindow_(this->timer_minutes_);
+  }
+}
+
+float ZehnderRF::getTimerRemainingMinutes(void) const {
+  if (!this->timer_window_active_) {
+    return NAN;  // no timer running -> "unknown" rather than a misleading zero
+  }
+
+  const int32_t remaining = (int32_t) (this->timer_end_ms_ - millis());
+  if (remaining <= 0) {
+    return 0.0f;
+  }
+  return (float) ((remaining + 59999) / 60000);  // whole minutes, rounded up
+}
+
+float ZehnderRF::getFanPercentage(void) const {
+  if (!this->have_fan_settings_) {
+    return NAN;
+  }
+  // The byte is already a percentage (30 = 30% = 3.0 V on the unit's 0-10 V out).
+  return (float) this->fan_voltage_;
 }
 
 void ZehnderRF::discoveryStart(const uint8_t deviceId) {
