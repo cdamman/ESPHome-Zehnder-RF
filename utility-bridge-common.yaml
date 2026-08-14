@@ -1,0 +1,363 @@
+# The VMC side of an nRF905-controlled Zehnder / BUVA ventilation unit -- the
+# ESPHome equivalent of the "nRF905 VMC" Home Assistant integration, without the
+# HTTP bridge in between: the ESP talks to the ventilation unit directly.
+#
+#   * the named modes (1 - Low / 2 - Normal / 3 - High);
+#   * a boost on the entity's own on/off, with a duration set from Home Assistant;
+#   * the count-down of the running timer;
+#   * present and daily power consumption, at watts set from Home Assistant.
+#
+# No percentage slider: the unit has three fixed speeds, so the modes are the
+# interface. The Airflow sensor stays, as a reading of what the unit reports rather
+# than a way to drive it.
+#
+# This file holds only that: the fan and the entities around it. Nothing about a
+# board, its pins, or the network lives here -- that is what an ESPHome config
+# already has to declare for itself (see utility-bridge-d1-mini.yaml or
+# utility-bridge-esp32.yaml), whatever the hardware. This is
+# the part that stays the same across installs, so it is meant to be pulled in as
+# a package rather than copied: an update here arrives with the next build instead
+# of another copy-paste.
+#
+# It deliberately does *not* choose a language: the labels come from whichever
+# translations/*.yaml is merged alongside it, which is the caller's call. On its
+# own, every ${name_*} below would stay unresolved. `devicename` is the same way --
+# set by the config that pulls this one in, since that config needs it too (its own
+# `esphome:` block).
+#
+# Defaults for the values a single install may want to change. Every one of them can
+# be set again in the file that pulls this one in: substitutions of the including
+# config win over those of a package.
+substitutions:
+  # Starting value of the per-speed power figures, in watts -- the defaults of the
+  # Home Assistant integration. They are only the initial values: each one is a
+  # number entity, so the figures are set from Home Assistant and kept there.
+  power_low: "13.0"
+  power_medium: "28.0"
+  power_high: "58.5"
+
+# Flash writes are batched every 5 minutes instead of the default 60 seconds. The
+# daily-energy total changes constantly and is saved on every publish, and several
+# `number` entities restore their value at boot too, so the default cadence adds up
+# to a lot of write cycles over the years, on any board. The cost is a window of up
+# to 5 minutes: a power cut can lose the last edit of a number, a few minutes of the
+# daily total, or a pairing that was just established. Pinning the pairing (see your
+# per-install config) makes that last one moot.
+preferences:
+  flash_write_interval: 5min
+
+# `refresh: always` rather than ESPHome's 1d default: this file and the component
+# it declares below are versioned together, and a cached copy of one against a
+# fresh copy of the other is exactly how you get "[option] is an invalid option
+# for [fan.zehnder]" -- the new config reaching yesterday's component clone. The
+# cost is a git fetch per build, and a build that needs the network -- set it
+# back to 1d, here and on the package pull in your per-install config, once you
+# stop following changes upstream.
+external_components:
+  - source: github://cdamman/ESPHome-Zehnder-RF
+    refresh: always
+
+fan:
+  - platform: zehnder
+    id: ${devicename}_fan
+    # No name: this is the device's main control, so it takes the device's own name
+    # instead of adding a word to it -- your per-install config's own
+    # `esphome: friendly_name:` is where that name comes from, and ESPHome requires
+    # it be set for this to work.
+    name: None
+    icon: mdi:hvac
+    nrf905: nrf905_rf
+    # How often the unit is polled. Changes made elsewhere do not wait for this --
+    # the radio listens continuously and decodes them as they happen -- so this is
+    # what catches up after a missed frame, and what paces the self-heal counter
+    # (self_heal_after polls without an answer, so ~5 min at 30 s).
+    update_interval: "30s"
+    # zehnder = 868.400 MHz; buva = 868.200 MHz (see the nRF905-API config).
+    model: zehnder
+    # The modes as they show up in Home Assistant and Google Home. No "off" among
+    # them: this unit has no stop mode in practice, only three running speeds --
+    # the fan entity's own on/off (the boost) is the only power control there is.
+    preset_modes:
+      "${mode_low}": low
+      "${mode_medium}": medium
+      "${mode_high}": high
+    # The component advertises no speed control at all, so Home Assistant shows no
+    # percentage slider: the on/off (the boost) and the modes above are the whole
+    # interface. The speed is still tracked, and a mode or the set_speed service
+    # still sets it.
+    # The entity reads "on" at the boost speed; switching it off returns to
+    # normal speed rather than stopping the unit.
+    boost_speed: high
+    revert_speed: medium
+    boost_duration: 30min
+    # The pairing (network_id / main_unit_id / my_device_id) is not pinned here: it
+    # belongs to one unit, not to every install, so it goes in the config that pulls
+    # this file in -- see the `!extend` block at the end of your per-install config.
+    # Without it the
+    # component discovers the unit on first boot and keeps the identity in flash.
+    # The three sensors below are derived from the fan's state, so refresh them as
+    # soon as it changes instead of waiting for their own interval -- otherwise a
+    # mode change or a boost takes up to 30 s to show up in the consumption. This
+    # fires on the optimistic publish too, so it does not wait for the RF reply.
+    on_state:
+      - component.update: ${devicename}_power
+      - component.update: ${devicename}_timer_remaining
+      - component.update: ${devicename}_airflow
+
+number:
+  # The integration's "timer duration" number: 1 to 240 min, kept across
+  # restarts, and pushed into the component on every change.
+  - platform: template
+    name: "${name_timer_duration}"
+    id: ${devicename}_timer_minutes
+    icon: mdi:timer-cog-outline
+    entity_category: config
+    unit_of_measurement: min
+    mode: box
+    min_value: 1
+    max_value: 240
+    step: 1
+    initial_value: 30
+    optimistic: true
+    restore_value: true
+    # on_value (rather than set_action) also fires for the value restored at
+    # boot, so the component always starts with the right duration.
+    on_value:
+      - lambda: "id(${devicename}_fan)->set_timer_minutes((uint8_t) x);"
+
+  # Power drawn at each speed, in watts. The unit reports no consumption, so the
+  # sensors below derive it from these -- which is why they are settable from
+  # Home Assistant (the integration had them in its options) rather than baked
+  # into the firmware. Kept across restarts.
+  - platform: template
+    name: "${name_power_low}"
+    id: ${devicename}_power_low
+    icon: mdi:flash-outline
+    entity_category: config
+    device_class: power
+    unit_of_measurement: W
+    mode: box
+    min_value: 0
+    max_value: 10000
+    step: 0.5
+    initial_value: ${power_low}
+    optimistic: true
+    restore_value: true
+    on_value:
+      - component.update: ${devicename}_power
+
+  - platform: template
+    name: "${name_power_medium}"
+    id: ${devicename}_power_medium
+    icon: mdi:flash-outline
+    entity_category: config
+    device_class: power
+    unit_of_measurement: W
+    mode: box
+    min_value: 0
+    max_value: 10000
+    step: 0.5
+    initial_value: ${power_medium}
+    optimistic: true
+    restore_value: true
+    on_value:
+      - component.update: ${devicename}_power
+
+  - platform: template
+    name: "${name_power_high}"
+    id: ${devicename}_power_high
+    icon: mdi:flash-outline
+    entity_category: config
+    device_class: power
+    unit_of_measurement: W
+    mode: box
+    min_value: 0
+    max_value: 10000
+    step: 0.5
+    initial_value: ${power_high}
+    optimistic: true
+    restore_value: true
+    on_value:
+      - component.update: ${devicename}_power
+
+button:
+  # No boost button: the fan entity's own on/off starts and ends the boost. A
+  # boost of an unusual length is an automation setting the duration number and
+  # then turning the fan on.
+
+  # Re-pair on demand. Put the unit in its pairing window first (ComfoFan S:
+  # power-cycle it for a ~10 min join window) -- pressing this drops the current
+  # link and re-runs discovery, so the fan is uncontrollable until the join
+  # succeeds. With the identity pinned below in `fan:`, a re-pair does not survive
+  # a reboot: the pinned values are re-applied at boot.
+  - platform: template
+    name: "${name_pairing}"
+    id: ${devicename}_pairing
+    icon: mdi:link-variant
+    entity_category: config
+    on_press:
+      - lambda: "id(${devicename}_fan)->startPairing();"
+
+  - platform: restart
+    id: ${devicename}_restart
+    name: "${name_restart}"
+    entity_category: config
+
+binary_sensor:
+  # Live nRF905 SPI health (idle probe + config readback on each TX).
+  # ON = healthy; OFF = SPI wedged -> check the 3.3 V rail.
+  - platform: template
+    name: "${name_spi_healthy}"
+    device_class: connectivity
+    entity_category: diagnostic
+    lambda: "return id(nrf905_rf)->getLastConfigWriteOk();"
+
+sensor:
+  # Timer count-down, in minutes. The unit only reports *that* a timer runs,
+  # never the time left: the count-down therefore starts from the duration that
+  # was asked for, and clears as soon as the unit reports the timer is over.
+  - platform: template
+    name: "${name_timer_remaining}"
+    id: ${devicename}_timer_remaining
+    icon: mdi:timer-sand
+    device_class: duration
+    unit_of_measurement: min
+    accuracy_decimals: 0
+    update_interval: 30s
+    lambda: "return id(${devicename}_fan)->getTimerRemainingMinutes();"
+
+  # Present consumption, derived from the speed and the figures configured above
+  # (the unit does not measure it).
+  - platform: template
+    name: "${name_power}"
+    id: ${devicename}_power
+    device_class: power
+    state_class: measurement
+    unit_of_measurement: W
+    accuracy_decimals: 1
+    update_interval: 30s
+    lambda: |-
+      auto *vmc = id(${devicename}_fan);
+      switch (vmc->speed) {
+        // 0 is not a real speed on this unit -- it only shows up briefly at boot,
+        // before the first successful poll, so it borrows the lowest figure
+        // rather than get an entity of its own.
+        case 0:
+        case 1: return id(${devicename}_power_low).state;
+        case 2: return id(${devicename}_power_medium).state;
+        // Speed 4 has no mode and is unused here; should a physical remote ever
+        // select it, fall back to the "Fort" figure rather than stall the total.
+        default: return id(${devicename}_power_high).state;
+      }
+
+  # Daily consumption, reset at local midnight. The platform integrates watts over
+  # hours, so its raw total is in Wh: the multiply filter is what makes the kWh
+  # label true. Without it the value reads 1000x too high.
+  - platform: total_daily_energy
+    name: "${name_energy_today}"
+    power_id: ${devicename}_power
+    unit_of_measurement: kWh
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.001
+    entity_category: diagnostic
+
+  # Unit output in % (its 0-10 V control signal times ten), as the unit itself
+  # reports it -- a reading, not a control: the speed is set by a mode.
+  - platform: template
+    name: "${name_airflow}"
+    id: ${devicename}_airflow
+    icon: mdi:fan
+    unit_of_measurement: "%"
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: "return id(${devicename}_fan)->getFanPercentage();"
+
+  # --- RF diagnostics ------------------------------------------------------
+  - platform: template
+    name: "${name_rf_channel_busy}"
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: "return id(nrf905_rf)->getChannelBusyPercent();"
+  - platform: template
+    name: "${name_rf_frames_received}"
+    unit_of_measurement: "frames"
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    state_class: total_increasing
+    update_interval: 60s
+    lambda: "return id(nrf905_rf)->getRxValidCount();"
+  - platform: template
+    name: "${name_rf_frames_sent}"
+    unit_of_measurement: "frames"
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    state_class: total_increasing
+    update_interval: 60s
+    lambda: "return id(nrf905_rf)->getTxCount();"
+  - platform: template
+    name: "${name_rf_crc_errors}"
+    unit_of_measurement: "frames"
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    state_class: total_increasing
+    update_interval: 60s
+    lambda: "return id(nrf905_rf)->getRxInvalidCount();"
+  - platform: template
+    name: "${name_poll_success}"
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: "return id(${devicename}_fan)->getQuerySuccessPercent();"
+
+  - platform: wifi_signal
+    name: "${name_wifi_signal}"
+    entity_category: diagnostic
+    update_interval: 60s
+  - platform: uptime
+    type: timestamp
+    name: "${name_boot_time}"
+    entity_category: diagnostic
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "${name_ip_address}"
+      icon: mdi:ip-network
+      entity_category: diagnostic
+  - platform: version
+    name: "${name_esphome_version}"
+    entity_category: diagnostic
+    hide_timestamp: true
+
+  # Current pairing identity (from flash, discovery or the YAML pin), visible
+  # without having to read the logs. Copy these three into `network_id`,
+  # `main_unit_id` and `my_device_id` in your per-install config to pin the pairing.
+  - platform: template
+    name: "${name_network_id}"
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: |-
+      char buf[12];
+      snprintf(buf, sizeof(buf), "0x%08X", id(${devicename}_fan)->getNetworkId());
+      return std::string(buf);
+  - platform: template
+    name: "${name_main_unit_id}"
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: |-
+      char buf[6];
+      snprintf(buf, sizeof(buf), "0x%02X", id(${devicename}_fan)->getMainUnitId());
+      return std::string(buf);
+  - platform: template
+    name: "${name_controller_id}"
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: |-
+      char buf[6];
+      snprintf(buf, sizeof(buf), "0x%02X", id(${devicename}_fan)->getMyDeviceId());
+      return std::string(buf);

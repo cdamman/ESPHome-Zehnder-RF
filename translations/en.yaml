@@ -1,0 +1,57 @@
+# English strings: the default language, and the reference list every other file
+# follows (tests/check_translations.py compares against this one).
+#
+# A language is chosen by listing one of these files next to utility-bridge-common.yaml, so it
+# works both from disk and straight from GitHub:
+#
+#   packages:
+#     vmc:
+#       url: https://github.com/cdamman/ESPHome-Zehnder-RF
+#       files: [translations/en.yaml, utility-bridge-common.yaml]
+#
+# These strings are also what Google Home announces: it forwards the names and the
+# mode labels verbatim, ignoring Home Assistant's own translations.
+#
+# Overriding a single string does not require editing this file -- set the same key
+# in your per-install config's own substitutions (utility-bridge-d1-mini.yaml or
+# utility-bridge-esp32.yaml), which take precedence over a package.
+
+substitutions:
+  # Modes of the fan entity. The number is part of the label so Home Assistant and
+  # Google Home list them in order. No "0 - Off": this unit has no stop mode in
+  # practice, only three running speeds.
+  mode_low: "1 - Low"
+  mode_medium: "2 - Normal"
+  mode_high: "3 - High"
+
+  # Boost
+  name_timer_duration: "Timer duration"
+  name_timer_remaining: "Timer remaining"
+
+  # Consumption
+  name_power: "Current consumption"
+  name_energy_today: "Consumption today"
+  name_airflow: "Airflow"
+  name_power_low: "Power 1 - Low"
+  name_power_medium: "Power 2 - Normal"
+  name_power_high: "Power 3 - High"
+
+  # Diagnostics. Every field about the RF link -- including the health of the
+  # SPI link to the nRF905 chip itself -- is prefixed "RF: ", so they group and
+  # read as one family. WiFi signal and the rest of the system diagnostics are
+  # left bare, being a different kind of thing.
+  name_pairing: "Re-pair"
+  name_restart: "Restart"
+  name_spi_healthy: "RF: SPI healthy"
+  name_rf_channel_busy: "RF: Channel busy"
+  name_rf_frames_received: "RF: Frames received"
+  name_rf_frames_sent: "RF: Frames sent"
+  name_rf_crc_errors: "RF: CRC errors"
+  name_poll_success: "RF: Unit response rate"
+  name_wifi_signal: "WiFi signal"
+  name_boot_time: "Boot time"
+  name_ip_address: "IP address"
+  name_esphome_version: "ESPHome version"
+  name_network_id: "RF: Network id"
+  name_main_unit_id: "RF: Unit id"
+  name_controller_id: "RF: Controller id"

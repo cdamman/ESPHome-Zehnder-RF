@@ -18,3 +18,9 @@ live-*.log
 /tests/.gitignore
 
 **/__pycache__
+
+# Written by tests/local_config.py: the assembled config it writes to stdout
+# (per the README's dev instructions and CI, always redirected to one of these
+# names), and the localised copy of utility-bridge-common.yaml it writes as a
+# side effect.
+/*-local.yaml

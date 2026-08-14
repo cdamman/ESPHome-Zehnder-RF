@@ -9,8 +9,12 @@ on:
 
 jobs:
   compile:
-    name: Compile components
+    name: Compile components (${{ matrix.config }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [tests/ci.yaml, tests/ci-esp8266.yaml]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,9 +36,56 @@ jobs:
             ~/.platformio
             ~/.cache/pip
             tests/.esphome
-          key: esphome-${{ hashFiles('requirements.txt', 'tests/ci.yaml') }}
+          key: esphome-${{ matrix.config }}-${{ hashFiles('requirements.txt', matrix.config) }}
           restore-keys: |
+            esphome-${{ matrix.config }}-
             esphome-
 
       - name: Compile
-        run: esphome compile tests/ci.yaml
+        run: esphome compile ${{ matrix.config }}
+
+  translations:
+    name: Validate both language packs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install ESPHome (pinned)
+        run: pip install -r requirements.txt
+
+      # The config reads credentials from secrets.yaml, which is not in the repo.
+      # `esphome config` only needs the keys to exist.
+      - name: Write a throwaway secrets.yaml
+        run: |
+          {
+            echo 'wifi_ssid: "ci"'
+            echo 'wifi_password: "ci-password"'
+            echo "esphome_vmc_api_key: \"$(head -c 32 /dev/urandom | base64 -w0)\""
+            echo 'esphome_vmc_ota_password: "ci-password"'
+          } > secrets.yaml
+
+      # esphome only warns about an unresolved ${...} and keeps the literal text as
+      # the entity name, so the label check is its own script.
+      - name: Every language provides every label
+        run: python3 tests/check_translations.py
+
+      # Each per-install config pulls utility-bridge-common.yaml and the component
+      # from GitHub; tests/local_config.py points both at this checkout, so a pull
+      # request is validated against its own changes rather than against what is
+      # already on main.
+      - name: Validate the config in every language, for every board
+        run: |
+          for device in utility-bridge-d1-mini.yaml utility-bridge-esp32.yaml; do
+            for lang in translations/*.yaml; do
+              echo "== $device / $lang"
+              python3 tests/local_config.py "$lang" "$device" > vmc-local.yaml
+              esphome config vmc-local.yaml > /dev/null
+            done
+          done

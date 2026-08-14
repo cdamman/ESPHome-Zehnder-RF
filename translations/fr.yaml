@@ -1,0 +1,55 @@
+# French strings. Select them by listing this file next to utility-bridge-common.yaml,
+# in your per-install config's `packages:` block:
+#
+#   packages:
+#     vmc:
+#       url: https://github.com/cdamman/ESPHome-Zehnder-RF
+#       files: [translations/fr.yaml, utility-bridge-common.yaml]
+#
+# The committed utility-bridge-d1-mini.yaml does exactly that -- it is the author's
+# own unit. English (translations/en.yaml) is the project default and the reference
+# list this file has to keep up with.
+#
+# Overriding a single string does not require editing this file -- set the same key
+# in your per-install config's own substitutions, which take precedence over a
+# package.
+
+substitutions:
+  # Modes of the fan entity. The number is part of the label so Home Assistant and
+  # Google Home list them in order. No "0 - Off": this unit has no stop mode in
+  # practice, only three running speeds.
+  mode_low: "1 - Bas"
+  mode_medium: "2 - Normal"
+  mode_high: "3 - Fort"
+
+  # Boost
+  name_timer_duration: "Durée du minuteur"
+  name_timer_remaining: "Minuteur restant"
+
+  # Consumption
+  name_power: "Consommation actuelle"
+  name_energy_today: "Consommation d'aujourd'hui"
+  name_airflow: "Débit"
+  name_power_low: "Puissance 1 - Bas"
+  name_power_medium: "Puissance 2 - Normal"
+  name_power_high: "Puissance 3 - Fort"
+
+  # Diagnostics. Tout ce qui concerne la liaison RF -- y compris la santé de la
+  # liaison SPI avec la puce nRF905 elle-même -- est préfixé "RF: ", pour qu'ils
+  # se regroupent visuellement. Le signal WiFi et le reste des diagnostics
+  # système restent sans préfixe, étant d'une autre nature.
+  name_pairing: "Réappairer"
+  name_restart: "Redémarrer"
+  name_spi_healthy: "RF: SPI fonctionnel"
+  name_rf_channel_busy: "RF: Occupation du canal"
+  name_rf_frames_received: "RF: Trames reçues"
+  name_rf_frames_sent: "RF: Trames envoyées"
+  name_rf_crc_errors: "RF: Erreurs CRC"
+  name_poll_success: "RF: Taux de réponse de l'unité"
+  name_wifi_signal: "Signal WiFi"
+  name_boot_time: "Démarré le"
+  name_ip_address: "Adresse IP"
+  name_esphome_version: "Version ESPHome"
+  name_network_id: "RF: ID réseau"
+  name_main_unit_id: "RF: ID de l'unité"
+  name_controller_id: "RF: ID contrôleur"

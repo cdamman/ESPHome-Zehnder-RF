@@ -13,7 +13,7 @@ ZehnderRF = zehnder_ns.class_("ZehnderRF", cg.Component, fan.Fan)
 
 CONF_NRF905 = "nrf905"
 
-# Optional: pin the paired identity (captured via the start_pairing service) so it
+# Optional: pin the paired identity (read off the three diagnostic entities) so it
 # survives a flash erase / fresh install without re-running discovery. network_id,
 # main_unit_id and my_device_id must be given together; the type fields default to
 # the usual ComfoFan values (main unit = 0x01, this device = 0x03 REMOTE_CONTROL).

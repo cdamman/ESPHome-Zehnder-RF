@@ -1,0 +1,153 @@
+# One ventilation unit: the board it runs on, how it reaches the network, and the
+# two lines that pull its fan entities in from GitHub (utility-bridge-common.yaml).
+# This is the only file to keep in an ESPHome configuration directory, next to a
+# secrets.yaml (see secrets.yaml.example) holding wifi_ssid, wifi_password,
+# esphome_vmc_api_key and esphome_vmc_ota_password.
+#
+# Everything below the `packages:` block is a plain ESPHome config -- `esphome:`,
+# `wifi:`, `api:`, `ota:`, `logger:`, `spi:`, `nrf905:` -- exactly what any install
+# would have to declare for itself, whatever the hardware. utility-bridge-common.yaml,
+# by contrast, holds nothing about a board or a network: only the fan and the
+# entities around it, which is why it is the same file regardless of what this one
+# looks like. This one is for an ESP32 devkit, wired the way utility-bridge.yaml was
+# in the fork this repository started from (see the README's Origin section),
+# before it was adapted here for a D1 mini; for a D1 mini, use
+# utility-bridge-d1-mini.yaml instead.
+#
+# What is worth changing:
+#
+#   * `devicename` / `upper_devicename`: the entity ids and the device name (the
+#     fan entity carries the device name itself, so `upper_devicename` is what
+#     shows up in Home Assistant and Google Home);
+#   * the language of every label, mode names included, by listing translations/en.yaml
+#     (the default) or translations/fr.yaml. The choice is made here rather than in
+#     utility-bridge-common.yaml because a config wins over the packages it pulls
+#     in, never the other way round;
+#   * any other key of utility-bridge-common.yaml's `substitutions` -- the
+#     per-speed power figures, or a single entity label
+#     (`name_airflow: "Living room airflow"`) -- for the same reason: what is set
+#     below wins over the package;
+#   * the board and the pins, for your own ESP32 wiring -- nothing here is tied to
+#     the devkit below.
+#
+# Anything of utility-bridge-common.yaml that is *not* a substitution is changed
+# by extending the entity: `id: !extend <the entity's id>` merges into the entry
+# the package declares instead of adding a second one. This is how the pairing is
+# pinned below.
+#
+# `refresh: always` rather than the 1d default, on the package below: this config
+# and utility-bridge-common.yaml are versioned together, and a cached copy of one
+# against a fresh copy of the other is exactly how you get "[option] is an invalid
+# option for [fan.zehnder]" -- the new config reaching yesterday's common config.
+# The component itself is fetched from within utility-bridge-common.yaml, which
+# has the same `refresh: always` on its own `external_components:` block, for the
+# same reason. The cost of both is a git fetch per build, and a build that needs
+# the network -- set both back to 1d once you stop following changes upstream.
+substitutions:
+  devicename: zehnder_fan
+  upper_devicename: Zehnder Fan
+
+esphome:
+  name: ${devicename}
+  friendly_name: ${upper_devicename}
+  comment: nRF905 ventilation unit
+
+esp32:
+  board: esp32doit-devkit-v1
+  framework:
+    type: arduino
+
+logger:
+  level: INFO  # DEBUG to see the RF frames
+
+# No user services: the entities cover everything they did. Boost and cancel are the
+# fan's on/off, a speed is a mode, re-pairing is a button, and the radio is
+# reconfigured from scratch by the Restart button. For a boost of an unusual length,
+# an automation sets the duration number and then turns the fan on.
+api:
+  encryption:
+    key: !secret esphome_vmc_api_key
+
+ota:
+  - platform: esphome
+    password: !secret esphome_vmc_ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Fallback access point, brought up when the Wi-Fi cannot be joined -- open, and
+  # paired with captive_portal below, so a lost network is fixed from a phone
+  # without a password to remember. It only exists while the Wi-Fi is down, but
+  # anyone in range can reach the portal (and the OTA password still guards a
+  # flash). To close it, add the passphrase:
+  #
+  #   ap:
+  #     password: !secret esphome_vmc_ap_password
+  ap:
+    ssid: "${devicename} Fallback"
+
+captive_portal:
+
+# An ESP32 devkit has RAM to spare, unlike the D1 mini config -- so unlike there,
+# the local web UI is worth the cost.
+web_server:
+  port: 80
+
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+
+spi:
+  clk_pin: GPIO14
+  mosi_pin: GPIO13
+  miso_pin: GPIO12
+
+nrf905:
+  id: "nrf905_rf"
+  cs_pin: GPIO23
+  ce_pin: GPIO27
+  pwr_pin: GPIO26
+  txen_pin: GPIO25
+  dr_pin: GPIO35
+  # Unlike the D1 mini, this devkit has pins to spare, so AM and CD are wired --
+  # though the component does not need them, reading both from the nRF905's own
+  # status register over SPI regardless.
+  am_pin: GPIO32
+  cd_pin: GPIO33
+  # Onboard LED, pulsed briefly on each received RF frame. Unlike the D1 mini's,
+  # this one is wired active-high, so no `inverted:` here.
+  led_pin: GPIO2
+
+packages:
+  vmc:
+    url: https://github.com/cdamman/ESPHome-Zehnder-RF
+    files: [translations/en.yaml, utility-bridge-common.yaml]
+    ref: main
+    refresh: always
+
+# Optional: pin the pairing, so it survives a flash erase and the unit never has to
+# be put back in its join window. `id: !extend` merges these options into the fan
+# the package declares -- everything else about it (platform, pins, modes) stays as
+# it is there.
+#
+# Read the values off the three diagnostic entities (RF: Network id / RF: Unit
+# id / RF: Controller id) after a successful pairing, or copy them from
+# nRF905-API's fanconfig, whose option names these mirror. One trap there: that
+# JSON calls the
+# fan the "remote" (the remote end of the link), so its remote_id is the *main
+# unit's*, and its my_device_id is this controller's. All three go in together, and
+# the two type fields already default to the values below. The three below are
+# placeholders -- use your own unit's actual identifiers, read off those
+# diagnostic entities.
+#
+# Keeping an nRF905-API my_device_id also means retiring that firmware on this
+# network: two devices answering as the same id collide.
+#
+# fan:
+#   - id: !extend ${devicename}_fan
+#     network_id: 0x12345678      # fanconfig "network"
+#     main_unit_id: 0xAA          # fanconfig "remote_id"    (the fan)
+#     my_device_id: 0xBB          # fanconfig "my_device_id" (this controller)
+#     main_unit_type: 0x01        # default, = fanconfig "remote_type"
+#     my_device_type: 0x03        # default, = fanconfig "my_device_type"

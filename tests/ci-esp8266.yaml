@@ -1,13 +1,12 @@
-# Minimal config used only by CI to compile-test the local components.
+# Minimal config used only by CI to compile-test the local components on ESP8266.
 # No wifi / api / ota / secrets needed for a compile check.
 esphome:
-  name: ci-test
-  comment: CI compile test
+  name: ci-test-esp8266
+  comment: CI compile test (ESP8266)
 
-esp32:
-  board: esp32doit-devkit-v1
-  framework:
-    type: arduino
+esp8266:
+  board: d1_mini
+  restore_from_flash: true
 
 logger:
   level: DEBUG
@@ -19,6 +18,7 @@ external_components:
       type: local
       path: ../components
 
+# The Wemos D1 mini pins of vmc-d1-mini.yaml (nRF905-API's table): no AM, no CD.
 spi:
   clk_pin: GPIO14
   mosi_pin: GPIO13
@@ -26,13 +26,11 @@ spi:
 
 nrf905:
   id: nrf905_rf
-  cs_pin: GPIO23
-  cd_pin: GPIO33
-  ce_pin: GPIO27
-  pwr_pin: GPIO26
-  txen_pin: GPIO25
-  am_pin: GPIO32
-  dr_pin: GPIO35
+  cs_pin: GPIO15
+  ce_pin: GPIO4
+  pwr_pin: GPIO0
+  txen_pin: GPIO16
+  dr_pin: GPIO5
 
 fan:
   - platform: zehnder
@@ -46,14 +44,12 @@ fan:
       "1 - Low": low
       "2 - Normal": medium
       "3 - High": high
+    # Same as utility-bridge-common.yaml: refresh the speed-derived sensors on every state publish.
+    on_state:
+      - component.update: fan_power
     boost_speed: high
     revert_speed: medium
     boost_duration: 30min
-    # Pinned pairing: this path had no coverage, and shadowing ESPHome's reserved
-    # `device_id` broke it silently until someone uncommented it in a real config.
-    network_id: 0xCB109EA2
-    main_unit_id: 0xD9
-    my_device_id: 0x86
 
 # Exercise the boost / timer API the way utility-bridge-common.yaml drives it, so a signature
 # change breaks CI instead of a user's build.
@@ -109,11 +105,6 @@ number:
     step: 0.5
 
 button:
-  - platform: template
-    name: "Re-pair"
-    entity_category: config
-    on_press:
-      - lambda: "id(zehnder_fan)->startPairing();"
   - platform: template
     name: "Boost"
     on_press:
