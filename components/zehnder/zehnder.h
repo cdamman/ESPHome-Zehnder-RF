@@ -72,7 +72,7 @@ class ZehnderRF : public Component, public fan::Fan {
   // Optionally pin the paired identity from YAML so it survives a flash erase /
   // fresh install with no dependency on a stored discovery. When set, these
   // override whatever is loaded from flash at setup(). Use the values captured
-  // by a successful re-pair (start_pairing). See CLAUDE.md.
+  // by a successful re-pair (start_pairing); see the README.
   void set_paired_config(uint32_t networkId, uint8_t mainType, uint8_t mainId, uint8_t deviceType,
                          uint8_t deviceId) {
     this->yaml_network_id_ = networkId;
