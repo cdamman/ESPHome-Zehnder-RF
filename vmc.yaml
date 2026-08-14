@@ -1,0 +1,431 @@
+# RF-controlled ventilation unit (nRF905) on a Wemos D1 mini / D1 mini Pro -- the
+# ESPHome equivalent of the "nRF905 VMC" Home Assistant integration, without the
+# HTTP bridge in between: the ESP talks to the ventilation unit directly.
+#
+#   * the named modes (0 - Off / 1 - Bas / 2 - Normal / 3 - Fort);
+#   * a boost on the entity's own on/off, plus a button, with a duration set
+#     from Home Assistant;
+#   * the count-down of the running timer;
+#   * present and daily power consumption, at watts set from Home Assistant.
+#
+# Entity names and mode labels are kept in French on purpose: Google Home
+# forwards them as-is, ignoring Home Assistant's translations.
+#
+# The pins are exactly nRF905-API's Wemos D1 table, so a board already wired for
+# that firmware can be flashed with this one without rewiring:
+#
+#   | nRF905     | D1 pin      | GPIO    |
+#   | ---------- | ----------- | ------- |
+#   | CE         | D2          | GPIO4   |
+#   | DR         | D1          | GPIO5   |
+#   | PWR        | D3          | GPIO0   |
+#   | TX_EN      | D0          | GPIO16  |
+#   | MOSI       | D7 / HMOSI  | GPIO13  |
+#   | MISO       | D6 / HMISO  | GPIO12  |
+#   | CLK / SCK  | D5 / HCLK   | GPIO14  |
+#   | CS / CSN   | D8 / HCS    | GPIO15  |
+#   | AM, CD     | -           | -       |
+#
+# AM and CD stay unconnected, as in nRF905-API: the D1 mini has no pins left for
+# them. The component does not need them -- it reads both from the nRF905's own
+# status register over SPI -- so they are simply left out below.
+#
+# Wi-Fi / API / OTA credentials come from secrets.yaml (see secrets.yaml.example).
+
+substitutions:
+  devicename: vmc
+  upper_devicename: VMC
+
+  # Starting value of the per-mode power figures, in watts -- the defaults of the
+  # Home Assistant integration. They are only the initial values: each one is a
+  # number entity, so the figures are set from Home Assistant and kept there.
+  power_off: "0.0"
+  power_low: "13.0"
+  power_medium: "28.0"
+  power_high: "58.5"
+
+esphome:
+  name: ${devicename}
+  friendly_name: ${upper_devicename}
+  comment: nRF905 ventilation unit
+
+esp8266:
+  board: d1_mini
+  # Without this, the values the number entities restore (timer duration, the four
+  # power figures) live in RTC memory: they survive a reset but not a power cut.
+  # The pairing is stored in flash either way.
+  restore_from_flash: true
+
+# No web_server: on an ESP8266 it costs RAM that the API connection needs. Add it
+# back if you want the local page and can spare the memory.
+
+# SPI: the D1 mini's hardware SPI pins (HSPI).
+
+logger:
+  level: INFO  # DEBUG to see the RF frames
+
+api:
+  encryption:
+    key: !secret esphome_vmc_api_key
+
+  services:
+    # Boost for a given duration (0 = the duration configured in Home Assistant).
+    - service: boost
+      variables:
+        minutes: int
+      then:
+        - lambda: "id(${devicename}_fan)->startBoost(minutes);"
+
+    - service: cancel_boost
+      then:
+        - lambda: "id(${devicename}_fan)->cancelBoost();"
+
+    # Raw command: speed 0-4, duration in minutes (0 = no timer).
+    - service: set_speed
+      variables:
+        run_speed: int
+        run_time: int
+      then:
+        - lambda: "id(${devicename}_fan)->setSpeed(run_speed, run_time);"
+
+    # Re-pair. Put the unit in its pairing window first (ComfoFan S: power-cycle
+    # it for a ~10 min join window).
+    - service: start_pairing
+      then:
+        - lambda: "id(${devicename}_fan)->startPairing();"
+
+    # Rewrite the nRF905 config without rebooting the ESP (recovers a soft radio
+    # config glitch).
+    - service: reinit_radio
+      then:
+        - lambda: "id(nrf905_rf)->reinitRadio();"
+
+ota:
+  - platform: esphome
+    password: !secret esphome_vmc_ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  ap:
+    ssid: "${devicename} Fallback"
+    password: !secret esphome_vmc_ap_password
+
+captive_portal:
+
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+
+external_components:
+  - source:
+      type: local
+      path: components
+
+spi:
+  clk_pin: GPIO14 # D5, SCK
+  mosi_pin: GPIO13 # D7, MOSI
+  miso_pin: GPIO12 # D6, MISO
+
+nrf905:
+  id: "nrf905_rf"
+  cs_pin: GPIO15 # D8, CSN
+  ce_pin: GPIO4 # D2, CE
+  pwr_pin: GPIO0 # D3, PWR
+  txen_pin: GPIO16 # D0, TX_EN
+  dr_pin: GPIO5 # D1, DR
+  # AM and CD are not wired on this board -- see the table above.
+  # Onboard LED (D4), pulsed briefly on each received RF frame. It is wired to
+  # 3.3 V, so it lights when the pin goes low.
+  led_pin:
+    number: GPIO2
+    inverted: true
+
+fan:
+  - platform: zehnder
+    id: ${devicename}_fan
+    name: "Ventilation"
+    icon: mdi:hvac
+    nrf905: nrf905_rf
+    update_interval: "60s"
+    # zehnder = 868.400 MHz; buva = 868.200 MHz (see the nRF905-API config).
+    model: zehnder
+    # The modes as they show up in Home Assistant and Google Home. "0 - Off" is
+    # what actually stops the unit: the entity's on/off is the boost.
+    preset_modes:
+      "0 - Off": "off"
+      "1 - Bas": low
+      "2 - Normal": medium
+      "3 - Fort": high
+    # The entity reads "on" at the boost speed; switching it off returns to
+    # normal speed rather than stopping the unit.
+    boost_speed: high
+    revert_speed: medium
+    boost_duration: 30min
+    # Optional: pin the pairing so it survives a flash erase. Read the values off
+    # the diagnostic sensors after a successful start_pairing.
+    # network_id: 0xCB109EA2
+    # main_unit_id: 0xD9
+    # device_id: 0x86
+
+number:
+  # The integration's "timer duration" number: 1 to 240 min, kept across
+  # restarts, and pushed into the component on every change.
+  - platform: template
+    name: "Durée du timer"
+    id: ${devicename}_timer_minutes
+    icon: mdi:timer-cog-outline
+    entity_category: config
+    unit_of_measurement: min
+    mode: box
+    min_value: 1
+    max_value: 240
+    step: 1
+    initial_value: 30
+    optimistic: true
+    restore_value: true
+    # on_value (rather than set_action) also fires for the value restored at
+    # boot, so the component always starts with the right duration.
+    on_value:
+      - lambda: "id(${devicename}_fan)->set_timer_minutes((uint8_t) x);"
+
+  # Power drawn at each speed, in watts. The unit reports no consumption, so the
+  # sensors below derive it from these -- which is why they are settable from
+  # Home Assistant (the integration had them in its options) rather than baked
+  # into the firmware. Kept across restarts.
+  - platform: template
+    name: "Puissance 0 - Off"
+    id: ${devicename}_power_off
+    icon: mdi:flash-outline
+    entity_category: config
+    device_class: power
+    unit_of_measurement: W
+    mode: box
+    min_value: 0
+    max_value: 10000
+    step: 0.5
+    initial_value: ${power_off}
+    optimistic: true
+    restore_value: true
+
+  - platform: template
+    name: "Puissance 1 - Bas"
+    id: ${devicename}_power_low
+    icon: mdi:flash-outline
+    entity_category: config
+    device_class: power
+    unit_of_measurement: W
+    mode: box
+    min_value: 0
+    max_value: 10000
+    step: 0.5
+    initial_value: ${power_low}
+    optimistic: true
+    restore_value: true
+
+  - platform: template
+    name: "Puissance 2 - Normal"
+    id: ${devicename}_power_medium
+    icon: mdi:flash-outline
+    entity_category: config
+    device_class: power
+    unit_of_measurement: W
+    mode: box
+    min_value: 0
+    max_value: 10000
+    step: 0.5
+    initial_value: ${power_medium}
+    optimistic: true
+    restore_value: true
+
+  - platform: template
+    name: "Puissance 3 - Fort"
+    id: ${devicename}_power_high
+    icon: mdi:flash-outline
+    entity_category: config
+    device_class: power
+    unit_of_measurement: W
+    mode: box
+    min_value: 0
+    max_value: 10000
+    step: 0.5
+    initial_value: ${power_high}
+    optimistic: true
+    restore_value: true
+
+button:
+  - platform: template
+    name: "Boost"
+    id: ${devicename}_boost
+    icon: mdi:fan-plus
+    on_press:
+      - lambda: "id(${devicename}_fan)->startBoost(0);"  # 0 = configured duration
+
+  - platform: template
+    name: "Arrêter le boost"
+    id: ${devicename}_boost_cancel
+    icon: mdi:fan-off
+    on_press:
+      - lambda: "id(${devicename}_fan)->cancelBoost();"
+
+  - platform: restart
+    id: ${devicename}_restart
+    name: "Redémarrer"
+    entity_category: config
+
+binary_sensor:
+  - platform: template
+    name: "Timer actif"
+    id: ${devicename}_timer_active
+    icon: mdi:timer-outline
+    lambda: "return id(${devicename}_fan)->isTimerActive();"
+
+  # Live nRF905 SPI health (idle probe + config readback on each TX).
+  # ON = healthy; OFF = SPI wedged -> check the 3.3 V rail.
+  - platform: template
+    name: "SPI radio OK"
+    device_class: connectivity
+    entity_category: diagnostic
+    lambda: "return id(nrf905_rf)->getLastConfigWriteOk();"
+
+sensor:
+  # Timer count-down, in minutes. The unit only reports *that* a timer runs,
+  # never the time left: the count-down therefore starts from the duration that
+  # was asked for, and clears as soon as the unit reports the timer is over.
+  - platform: template
+    name: "Timer restant"
+    id: ${devicename}_timer_remaining
+    icon: mdi:timer-sand
+    device_class: duration
+    unit_of_measurement: min
+    accuracy_decimals: 0
+    update_interval: 30s
+    lambda: "return id(${devicename}_fan)->getTimerRemainingMinutes();"
+
+  # Present consumption, derived from the speed and the figures configured above
+  # (the unit does not measure it).
+  - platform: template
+    name: "Consommation"
+    id: ${devicename}_power
+    device_class: power
+    state_class: measurement
+    unit_of_measurement: W
+    accuracy_decimals: 1
+    update_interval: 30s
+    lambda: |-
+      auto *vmc = id(${devicename}_fan);
+      switch (vmc->speed) {
+        case 0: return id(${devicename}_power_off).state;  // stopped, but still wired
+        case 1: return id(${devicename}_power_low).state;
+        case 2: return id(${devicename}_power_medium).state;
+        // Speed 4 has no mode and is unused here; should a physical remote ever
+        // select it, fall back to the "Fort" figure rather than stall the total.
+        default: return id(${devicename}_power_high).state;
+      }
+
+  # Daily consumption, reset at local midnight.
+  - platform: total_daily_energy
+    name: "Consommation du jour"
+    power_id: ${devicename}_power
+    unit_of_measurement: kWh
+    state_class: total_increasing
+    accuracy_decimals: 3
+    entity_category: diagnostic
+
+  # Unit output in % (its 0-10 V control signal times ten), as it reports it.
+  - platform: template
+    name: "Débit"
+    icon: mdi:fan
+    unit_of_measurement: "%"
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: "return id(${devicename}_fan)->getFanPercentage();"
+
+  # --- RF diagnostics ------------------------------------------------------
+  - platform: template
+    name: "Canal RF occupé"
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: "return id(nrf905_rf)->getChannelBusyPercent();"
+  - platform: template
+    name: "Trames RF reçues"
+    unit_of_measurement: "frames"
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    state_class: total_increasing
+    update_interval: 60s
+    lambda: "return id(nrf905_rf)->getRxValidCount();"
+  - platform: template
+    name: "Trames RF envoyées"
+    unit_of_measurement: "frames"
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    state_class: total_increasing
+    update_interval: 60s
+    lambda: "return id(nrf905_rf)->getTxCount();"
+  - platform: template
+    name: "Erreurs CRC RF"
+    unit_of_measurement: "frames"
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    state_class: total_increasing
+    update_interval: 60s
+    lambda: "return id(nrf905_rf)->getRxInvalidCount();"
+  - platform: template
+    name: "Taux de réponse du groupe"
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: "return id(${devicename}_fan)->getQuerySuccessPercent();"
+
+  - platform: wifi_signal
+    name: "Signal WiFi"
+    entity_category: diagnostic
+    update_interval: 60s
+  - platform: uptime
+    type: timestamp
+    name: "Démarré le"
+    entity_category: diagnostic
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "Adresse IP"
+      icon: mdi:ip-network
+      entity_category: diagnostic
+  - platform: version
+    name: "Version ESPHome"
+    entity_category: diagnostic
+    hide_timestamp: true
+
+  # Current pairing identity (from flash, discovery or the YAML pin), visible
+  # without having to read the logs.
+  - platform: template
+    name: "ID réseau"
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: |-
+      char buf[12];
+      snprintf(buf, sizeof(buf), "0x%08X", id(${devicename}_fan)->getNetworkId());
+      return std::string(buf);
+  - platform: template
+    name: "ID groupe"
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: |-
+      char buf[6];
+      snprintf(buf, sizeof(buf), "0x%02X", id(${devicename}_fan)->getMainUnitId());
+      return std::string(buf);
+  - platform: template
+    name: "ID télécommande"
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: |-
+      char buf[6];
+      snprintf(buf, sizeof(buf), "0x%02X", id(${devicename}_fan)->getMyDeviceId());
+      return std::string(buf);

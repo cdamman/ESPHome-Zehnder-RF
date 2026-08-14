@@ -9,8 +9,12 @@ on:
 
 jobs:
   compile:
-    name: Compile components
+    name: Compile components (${{ matrix.config }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [tests/ci.yaml, tests/ci-esp8266.yaml]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,9 +36,10 @@ jobs:
             ~/.platformio
             ~/.cache/pip
             tests/.esphome
-          key: esphome-${{ hashFiles('requirements.txt', 'tests/ci.yaml') }}
+          key: esphome-${{ matrix.config }}-${{ hashFiles('requirements.txt', matrix.config) }}
           restore-keys: |
+            esphome-${{ matrix.config }}-
             esphome-
 
       - name: Compile
-        run: esphome compile tests/ci.yaml
+        run: esphome compile ${{ matrix.config }}

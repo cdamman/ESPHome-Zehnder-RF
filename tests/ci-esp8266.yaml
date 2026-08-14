@@ -1,13 +1,12 @@
-# Minimal config used only by CI to compile-test the local components.
+# Minimal config used only by CI to compile-test the local components on ESP8266.
 # No wifi / api / ota / secrets needed for a compile check.
 esphome:
-  name: ci-test
-  comment: CI compile test
+  name: ci-test-esp8266
+  comment: CI compile test (ESP8266)
 
-esp32:
-  board: esp32doit-devkit-v1
-  framework:
-    type: arduino
+esp8266:
+  board: d1_mini
+  restore_from_flash: true
 
 logger:
   level: DEBUG
@@ -19,6 +18,7 @@ external_components:
       type: local
       path: ../components
 
+# The Wemos D1 mini pins of vmc-d1-mini.yaml (nRF905-API's table): no AM, no CD.
 spi:
   clk_pin: GPIO14
   mosi_pin: GPIO13
@@ -26,13 +26,11 @@ spi:
 
 nrf905:
   id: nrf905_rf
-  cs_pin: GPIO23
-  cd_pin: GPIO33
-  ce_pin: GPIO27
-  pwr_pin: GPIO26
-  txen_pin: GPIO25
-  am_pin: GPIO32
-  dr_pin: GPIO35
+  cs_pin: GPIO15
+  ce_pin: GPIO4
+  pwr_pin: GPIO0
+  txen_pin: GPIO16
+  dr_pin: GPIO5
 
 fan:
   - platform: zehnder
