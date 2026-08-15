@@ -232,9 +232,14 @@ you stop following changes here. (If you hit that error with a cached clone,
 deleting `.esphome/external_components` also clears it.)
 
 The D1 mini has no pins left for AM and CD, which nRF905-API also leaves
-unconnected — the component reads both from the nRF905's status register over SPI
-anyway, so nothing is lost by skipping them. The ESP32 devkit has pins to spare,
-so `utility-bridge-esp32.yaml` wires them regardless. Two ESP8266-only details in
+unconnected. Nothing is lost for **AM**: it is bit 7 of the status register, which
+the component polls over SPI regardless. **CD** has no such fallback — the nRF905's
+status register carries only DR and AM, so carrier detect exists on that pin and
+nowhere else. The ESP32 devkit has pins to spare and wires both, which is the one
+functional difference between the two boards here: **RF: Channel busy** is declared
+in `utility-bridge-esp32.yaml` rather than in the common config, because on a board
+without CD the component never samples it and the sensor would read a flat 0.0 %
+forever rather than "the band is quiet". Two ESP8266-only details in
 the D1 mini config: `restore_from_flash: true` is set, or the values the `number`
 entities restore would sit in RTC memory and be lost on a power cut; and
 `web_server` is left out to save the RAM the API connection needs — the ESP32

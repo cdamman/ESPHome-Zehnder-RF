@@ -110,7 +110,11 @@ nrf905:
   txen_pin: GPIO16 # D0, TX_EN
   dr_pin: GPIO5 # D1, DR
   # AM and CD are not wired on this board -- nRF905-API leaves them out too, and
-  # the component reads both from the nRF905's status register over SPI anyway.
+  # the D1 mini has no pins left for them. Nothing is lost for AM: it is bit 7 of
+  # the status register, which the component polls over SPI regardless. CD has no
+  # such fallback (the status register carries only DR and AM), so the one thing
+  # this board gives up is the channel-busy sensor, which is why that sensor sits
+  # in utility-bridge-esp32.yaml rather than in the common config.
   # Onboard LED (D4), pulsed briefly on each received RF frame. It is wired to
   # 3.3 V, so it lights when the pin goes low.
   led_pin:

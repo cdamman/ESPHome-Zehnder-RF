@@ -283,14 +283,10 @@ sensor:
   # a generic gauge for the percentages and a plain counter for the frame totals,
   # which makes the whole RF group look alike at a glance. The icons below say
   # which direction, and which kind of trouble, each one is about.
-  - platform: template
-    name: "${name_rf_channel_busy}"
-    icon: mdi:access-point  # the air itself, busy or not
-    unit_of_measurement: "%"
-    accuracy_decimals: 1
-    entity_category: diagnostic
-    update_interval: 60s
-    lambda: "return id(nrf905_rf)->getChannelBusyPercent();"
+  #
+  # Channel busy is not here: it needs the CD pin, which not every board wires,
+  # so it lives in the per-install configs that do (utility-bridge-esp32.yaml).
+  # See the note there.
   - platform: template
     name: "${name_rf_frames_received}"
     icon: mdi:download-network

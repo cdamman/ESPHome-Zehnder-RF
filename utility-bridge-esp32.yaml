@@ -110,9 +110,12 @@ nrf905:
   pwr_pin: GPIO26
   txen_pin: GPIO25
   dr_pin: GPIO35
-  # Unlike the D1 mini, this devkit has pins to spare, so AM and CD are wired --
-  # though the component does not need them, reading both from the nRF905's own
-  # status register over SPI regardless.
+  # Unlike the D1 mini, this devkit has pins to spare, so AM and CD are wired.
+  # AM is optional -- it is also bit 7 of the status register, which the component
+  # polls over SPI regardless. CD is not: the nRF905's status register carries
+  # only DR and AM (see NRF905_STATUS_* in components/nrf905/nRF905.h), so carrier
+  # detect exists on this pin and nowhere else. Wiring it is what makes the
+  # channel-busy sensor below possible.
   am_pin: GPIO32
   cd_pin: GPIO33
   # Onboard LED, pulsed briefly on each received RF frame. Unlike the D1 mini's,
@@ -125,6 +128,22 @@ packages:
     files: [translations/en.yaml, utility-bridge-common.yaml]
     ref: main
     refresh: always
+
+# Share of the time the radio hears a carrier while listening -- the nRF905 has no
+# RSSI, so this is the closest thing to "how congested is the band". It lives here
+# rather than in utility-bridge-common.yaml because it is only meaningful on a
+# board that wires CD: the component samples that pin in loop() and skips the
+# sampling entirely when it is absent, so on a D1 mini this sensor would read a
+# flat 0.0 % forever rather than "the band is quiet".
+sensor:
+  - platform: template
+    name: "${name_rf_channel_busy}"
+    icon: mdi:access-point  # the air itself, busy or not
+    unit_of_measurement: "%"
+    accuracy_decimals: 1
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: "return id(nrf905_rf)->getChannelBusyPercent();"
 
 # Optional: pin the pairing, so it survives a flash erase and the unit never has to
 # be put back in its join window. `id: !extend` merges these options into the fan

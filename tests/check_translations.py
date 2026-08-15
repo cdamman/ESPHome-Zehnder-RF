@@ -79,17 +79,25 @@ def main() -> int:
         for extra in sorted(keys - expected):
             failures.append(f"{lang.name}: '{extra}' is not in {REFERENCE}")
 
-    # 2. Every ${...} of the config is provided by a language file, by the config's
-    # own substitutions, or by each per-install config that pulls it in as a package
-    # (devicename, upper_devicename -- every per-install config needs those itself,
-    # for its own `esphome:` block, so each one is guaranteed to set them).
+    # 2. Every ${...} is provided by a language file, by the common config's own
+    # substitutions, or by the per-install config being built (devicename,
+    # upper_devicename -- every per-install config needs those itself, for its own
+    # `esphome:` block, so each one is guaranteed to set them).
+    #
+    # The per-install configs are scanned for uses too, not just for what they
+    # define: a label used only there (RF: Channel busy, which needs a CD pin and
+    # so lives in utility-bridge-esp32.yaml) would otherwise be checked by nothing
+    # -- both language files agreeing with each other says nothing about a key
+    # neither of them still has.
     for device in DEVICES:
         provided = expected | own_substitutions(CONFIG) | own_substitutions(device)
-        for used in sorted(used_substitutions(CONFIG) - provided):
-            failures.append(
-                f"{CONFIG.name}: '${{{used}}}' is defined nowhere "
-                f"(neither in {REFERENCE}, its own substitutions, or {device.name}'s)"
-            )
+        for source in (CONFIG, device):
+            for used in sorted(used_substitutions(source) - provided):
+                failures.append(
+                    f"{source.name}: '${{{used}}}' is defined nowhere "
+                    f"(neither in {REFERENCE}, {CONFIG.name}'s substitutions, "
+                    f"or {device.name}'s)"
+                )
 
     # 3. Each per-install config sources the common config and a language from
     # GitHub, by path. A rename here breaks every install at its next build, and
