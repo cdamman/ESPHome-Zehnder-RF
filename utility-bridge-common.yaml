@@ -206,6 +206,10 @@ button:
 binary_sensor:
   # Live nRF905 SPI health (idle probe + config readback on each TX).
   # ON = healthy; OFF = SPI wedged -> check the 3.3 V rail.
+  #
+  # No icon on purpose, unlike the RF sensors below: device_class connectivity
+  # draws lan-connect / lan-disconnect and switches between the two with the
+  # state, which an explicit icon would replace with a single static one.
   - platform: template
     name: "${name_spi_healthy}"
     device_class: connectivity
@@ -275,8 +279,13 @@ sensor:
     lambda: "return id(${devicename}_fan)->getFanPercentage();"
 
   # --- RF diagnostics ------------------------------------------------------
+  # Each of these carries its own icon: without one, Home Assistant falls back to
+  # a generic gauge for the percentages and a plain counter for the frame totals,
+  # which makes the whole RF group look alike at a glance. The icons below say
+  # which direction, and which kind of trouble, each one is about.
   - platform: template
     name: "${name_rf_channel_busy}"
+    icon: mdi:access-point  # the air itself, busy or not
     unit_of_measurement: "%"
     accuracy_decimals: 1
     entity_category: diagnostic
@@ -284,6 +293,7 @@ sensor:
     lambda: "return id(nrf905_rf)->getChannelBusyPercent();"
   - platform: template
     name: "${name_rf_frames_received}"
+    icon: mdi:download-network
     unit_of_measurement: "frames"
     accuracy_decimals: 0
     entity_category: diagnostic
@@ -292,6 +302,7 @@ sensor:
     lambda: "return id(nrf905_rf)->getRxValidCount();"
   - platform: template
     name: "${name_rf_frames_sent}"
+    icon: mdi:upload-network
     unit_of_measurement: "frames"
     accuracy_decimals: 0
     entity_category: diagnostic
@@ -300,6 +311,9 @@ sensor:
     lambda: "return id(nrf905_rf)->getTxCount();"
   - platform: template
     name: "${name_rf_crc_errors}"
+    # The odd one out among the frame counters, and it should look it: this is the
+    # only one where a rising number is bad news.
+    icon: mdi:alert-circle-outline
     unit_of_measurement: "frames"
     accuracy_decimals: 0
     entity_category: diagnostic
@@ -308,6 +322,7 @@ sensor:
     lambda: "return id(nrf905_rf)->getRxInvalidCount();"
   - platform: template
     name: "${name_poll_success}"
+    icon: mdi:swap-horizontal  # a poll and its answer, the round trip this counts
     unit_of_measurement: "%"
     accuracy_decimals: 1
     entity_category: diagnostic
@@ -337,8 +352,15 @@ text_sensor:
   # Current pairing identity (from flash, discovery or the YAML pin), visible
   # without having to read the logs. Copy these three into `network_id`,
   # `main_unit_id` and `my_device_id` in your per-install config to pin the pairing.
+  #
+  # Three hex strings that look alike and mean quite different things, which is
+  # exactly how they get copied into the wrong option. So each one is drawn as the
+  # thing it identifies rather than as a generic id: the network, the ventilation
+  # unit (the same icon the fan entity carries), and this controller -- a remote
+  # control as far as the protocol is concerned, device type 0x03.
   - platform: template
     name: "${name_network_id}"
+    icon: mdi:access-point-network
     entity_category: diagnostic
     update_interval: 60s
     lambda: |-
@@ -347,6 +369,7 @@ text_sensor:
       return std::string(buf);
   - platform: template
     name: "${name_main_unit_id}"
+    icon: mdi:hvac
     entity_category: diagnostic
     update_interval: 60s
     lambda: |-
@@ -355,6 +378,7 @@ text_sensor:
       return std::string(buf);
   - platform: template
     name: "${name_controller_id}"
+    icon: mdi:remote
     entity_category: diagnostic
     update_interval: 60s
     lambda: |-
