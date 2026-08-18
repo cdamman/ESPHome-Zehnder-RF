@@ -42,7 +42,7 @@ substitutions:
   # left bare, being a different kind of thing.
   name_pairing: "Re-pair"
   name_restart: "Restart"
-  name_spi_healthy: "RF: SPI healthy"
+  name_spi_healthy: "RF: SPI link"
   name_rf_channel_busy: "RF: Channel busy"
   name_rf_frames_received: "RF: Frames received"
   name_rf_frames_sent: "RF: Frames sent"

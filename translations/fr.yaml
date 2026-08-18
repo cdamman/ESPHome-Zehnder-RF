@@ -40,7 +40,7 @@ substitutions:
   # système restent sans préfixe, étant d'une autre nature.
   name_pairing: "Réappairer"
   name_restart: "Redémarrer"
-  name_spi_healthy: "RF: SPI fonctionnel"
+  name_spi_healthy: "RF: Connexion SPI"
   name_rf_channel_busy: "RF: Occupation du canal"
   name_rf_frames_received: "RF: Trames reçues"
   name_rf_frames_sent: "RF: Trames envoyées"
