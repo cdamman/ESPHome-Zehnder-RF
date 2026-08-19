@@ -51,7 +51,6 @@ substitutions:
   name_wifi_signal: "WiFi signal"
   name_boot_time: "Boot time"
   name_ip_address: "IP address"
-  name_esphome_version: "ESPHome version"
   name_network_id: "RF: Network id"
   name_main_unit_id: "RF: Unit id"
   name_controller_id: "RF: Controller id"

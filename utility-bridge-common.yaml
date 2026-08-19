@@ -340,10 +340,6 @@ text_sensor:
       name: "${name_ip_address}"
       icon: mdi:ip-network
       entity_category: diagnostic
-  - platform: version
-    name: "${name_esphome_version}"
-    entity_category: diagnostic
-    hide_timestamp: true
 
   # Current pairing identity (from flash, discovery or the YAML pin), visible
   # without having to read the logs. Copy these three into `network_id`,
