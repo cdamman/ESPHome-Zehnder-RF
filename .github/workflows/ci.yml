@@ -45,7 +45,7 @@ jobs:
         run: esphome compile ${{ matrix.config }}
 
   translations:
-    name: Validate both language packs
+    name: Validate every language and board, and compile one for real
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -59,6 +59,19 @@ jobs:
 
       - name: Install ESPHome (pinned)
         run: pip install -r requirements.txt
+
+      # For the compile step at the end of this job.
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+            .esphome
+          key: esphome-assembled-${{ hashFiles('requirements.txt', 'utility-bridge-common.yaml') }}
+          restore-keys: |
+            esphome-assembled-
+            esphome-
 
       # The config reads credentials from secrets.yaml, which is not in the repo.
       # `esphome config` only needs the keys to exist.
@@ -89,3 +102,16 @@ jobs:
               esphome config vmc-local.yaml > /dev/null
             done
           done
+
+      # `esphome config` does not compile lambdas, and the two tests/ci*.yaml
+      # configs are standalone -- they never include utility-bridge-common.yaml. So
+      # every lambda in it (the filter count-down, the consumption switch, the
+      # count-down sensors) went straight from a pull request to someone's board
+      # without ever being built. This compiles the assembled config for real.
+      #
+      # One board and one language is enough: the lambdas are identical across both
+      # boards, and a language only changes the strings around them.
+      - name: Compile the assembled config
+        run: |
+          python3 tests/local_config.py translations/en.yaml utility-bridge-d1-mini.yaml > vmc-local.yaml
+          esphome compile vmc-local.yaml

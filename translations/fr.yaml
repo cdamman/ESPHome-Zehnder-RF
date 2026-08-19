@@ -26,6 +26,14 @@ substitutions:
   name_timer_duration: "Durée du minuteur"
   name_timer_remaining: "Minuteur restant"
 
+  # Filtres. « État des filtres » nomme la chose mesurée ; son device_class problem
+  # fournit la valeur (« Problème » / « OK »), donc l'entité se lit « État des
+  # filtres : Problème » sans que le libellé ait à porter l'alerte lui-même.
+  name_filter_interval: "Intervalle de changement des filtres"
+  name_filter_due_on: "Changement des filtres prévu le"
+  name_filter_due: "État des filtres"
+  name_filter_reset: "Filtres changés"
+
   # Consumption
   name_power: "Consommation actuelle"
   name_energy_today: "Consommation d'aujourd'hui"

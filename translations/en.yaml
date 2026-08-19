@@ -28,6 +28,14 @@ substitutions:
   name_timer_duration: "Timer duration"
   name_timer_remaining: "Timer remaining"
 
+  # Filters. "Filter status" names the thing measured; its problem device_class
+  # supplies the value ("Problem" / "OK"), so the entity reads "Filter status:
+  # Problem" without the label having to carry the alarm itself.
+  name_filter_interval: "Filter interval"
+  name_filter_due_on: "Filter change due on"
+  name_filter_due: "Filter status"
+  name_filter_reset: "Filters changed"
+
   # Consumption
   name_power: "Current consumption"
   name_energy_today: "Consumption today"
