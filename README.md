@@ -370,7 +370,7 @@ February would shorten the interval — and for a filter this is both simpler to
 reason about and close enough. `filter_days_per_month` is a substitution, so
 `30` or `31` is a one-line override in your own config.
 
-Two things worth knowing:
+Three things worth knowing:
 
 - **It needs a clock.** `time:` lives in your per-install config (both committed
   ones declare `id: homeassistant_time`, which is the id the common config reads).
@@ -381,6 +381,18 @@ Two things worth knowing:
   has a clock records "now" and the deadline is set from there. If yours are
   already old, press **Filters changed** when you actually change them — same code
   path, and it is the only thing that moves the date afterwards.
+- **A section change needs more than a reflash.** If **Filters changed** shows up
+  under *Controls* instead of *Configuration* (or a sensor lands outside
+  *Diagnostic*), the firmware is almost certainly right and Home Assistant is
+  holding the category it recorded the first time it saw that entity: the entity
+  registry stores `entity_category` at creation, and an entity that already exists
+  is not moved when the device re-announces itself with a new one. Deleting the
+  entity, or the device, and letting the integration re-create it is what applies
+  the change — the same workaround
+  [ESPHome's own entity-category PR](https://github.com/esphome/esphome/pull/2636)
+  documents. Confirm which side you are looking at first: `esphome config` on your
+  own file prints the `entity_category:` the *next* build will carry, so if it says
+  `config` there, nothing in this repository can fix what the dashboard shows.
 
 ### Getting it onto your phone
 
