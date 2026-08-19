@@ -18,6 +18,7 @@ integration, which goes through the
 | `number` **Power 1-3** | Watts drawn at each speed, set from Home Assistant and kept across restarts |
 | `sensor` **Airflow** | Unit output in %, as the unit itself reports it |
 | `button` **Re-pair** | Re-runs the join handshake, for a unit whose pairing window is open |
+| **Filter reminder** | A configurable interval (3 months by default), the date they are next due, a `problem` flag once they are, and a button to press when they are changed — see [Filter change reminder](#filter-change-reminder) |
 
 The fan is the device's main control, so it is configured with `name: None` and
 inherits the device name (*Zehnder Fan*) rather than adding a word to it —
@@ -345,6 +346,114 @@ component never asks for: the schema refuses it and `setSpeed()` clamps to 3. A
 unit that reports it anyway -- someone pressed max on a physical remote -- is
 reported faithfully, matches no named mode, and its consumption falls back to the
 *3 - High* figure rather than stall the daily total.
+
+## Filter change reminder
+
+Four entities, no automation required for any of it to work:
+
+| Entity | Purpose |
+| --- | --- |
+| `number` **Filter interval** | How long a set of filters lasts, in months — 3 by default, set it to 4 or 6 and the deadline moves at once |
+| `sensor` **Filter change due on** | When they are next due. Home Assistant renders a timestamp as *3 November*, and as *in 2 months* on the cards that show relative time (diagnostic) |
+| `binary_sensor` **Filter status** | `device_class: problem`, so its value reads *Problem* / *OK* and Home Assistant shows it as something wrong with the device. Filed under *Diagnostic*, which does not stop an automation from watching it |
+| `button` **Filters changed** | Press it after changing them: today becomes the new reference date and the deadline moves out by one interval. Filed under *Configuration* on the device page, with the other buttons |
+
+The date of the last change is what is stored, not a remaining time — a filter ages
+in calendar time, and a stored deadline would drift every time you changed the
+interval. It survives reboots and power cuts (`globals` with `restore_value`), with
+the same up-to-5-minute window as every other stored value here, since
+`flash_write_interval` is `5min`.
+
+A month is counted as **30.44 days** (the average Gregorian month), so three months
+is 91 days. Calendar months would be more exact and less predictable — a reset in
+February would shorten the interval — and for a filter this is both simpler to
+reason about and close enough. `filter_days_per_month` is a substitution, so
+`30` or `31` is a one-line override in your own config.
+
+Two things worth knowing:
+
+- **It needs a clock.** `time:` lives in your per-install config (both committed
+  ones declare `id: homeassistant_time`, which is the id the common config reads).
+  Until Home Assistant has connected once, every entity above reads *unknown*
+  rather than counting from 1970, and the button refuses to do anything and says so
+  in the log.
+- **First boot assumes fresh filters.** With no date stored, the first minute that
+  has a clock records "now" and the deadline is set from there. If yours are
+  already old, press **Filters changed** when you actually change them — same code
+  path, and it is the only thing that moves the date afterwards.
+
+### Getting it onto your phone
+
+The firmware deliberately does not know your phone: it exposes the `problem` flag
+and lets Home Assistant decide. Two automations, the second one letting you clear
+the reminder from the notification itself:
+
+```yaml
+automation:
+  - alias: "VMC filters need changing"
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.zehnder_fan_filter_status
+        to: "on"
+    actions:
+      - action: notify.mobile_app_your_phone     # your device's own notify action
+        data:
+          title: "Ventilation filters"
+          message: "Time to change the VMC filters."
+          data:
+            actions:
+              - action: "VMC_FILTERS_CHANGED"
+                title: "Done — reset the timer"
+
+  - alias: "VMC filters changed, from the notification"
+    triggers:
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: "VMC_FILTERS_CHANGED"
+    actions:
+      - action: button.press
+        target:
+          entity_id: button.zehnder_fan_filters_changed
+```
+
+Pressing the button from the notification, from the device page, or from a
+dashboard are all the same thing. (On Home Assistant older than 2024.10, write
+`trigger:` / `action:` for the block keys and `service:` instead of `action:` for
+the calls — the mechanism is unchanged.)
+
+Entity ids follow the **language you chose**: with `translations/fr.yaml` the flag
+is `binary_sensor.zehnder_fan_etat_des_filtres` and the button
+`button.zehnder_fan_filtres_changes`. Check them under Developer tools → States
+before pasting.
+
+### About the "maintenance section"
+
+There is no maintenance section to put this in: Home Assistant has exactly three
+entity categories — primary (none), `config` and `diagnostic`. A `maintenance`
+category was proposed for precisely this kind of entity and the architecture team
+[closed the proposal](https://github.com/home-assistant/architecture/discussions/1016),
+to be reconsidered later. So the closest real options, in the order I would try
+them:
+
+- **`device_class: problem`**, which is what **Filter status** already
+  uses. It is Home Assistant's own way of saying "this device needs attention",
+  and it shows on the device page without any configuration.
+- **A to-do list**, if you want it to sit in a list of chores rather than in a
+  notification. Add to the first automation:
+
+  ```yaml
+      - action: todo.add_item
+        target:
+          entity_id: todo.maintenance
+        data:
+          item: "Change the VMC filters"
+  ```
+
+- **A label or category** named *Maintenance*, assigned to these entities in
+  Home Assistant, which is what its
+  [categories and labels](https://www.home-assistant.io/docs/organizing/categories/)
+  are for — and which a dashboard can then filter on.
 
 ## Pairing
 

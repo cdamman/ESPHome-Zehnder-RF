@@ -36,6 +36,17 @@ substitutions:
   power_medium: "28.0"
   power_high: "58.5"
 
+  # Starting value of the filter-change interval, in months -- also only an
+  # initial value: it is a number entity, set from Home Assistant afterwards.
+  filter_interval_months: "3"
+
+  # What a "month" means to the deadline. The average Gregorian month, so a
+  # 3-month interval is 91 days and a 12-month one lands within a day of the year.
+  # Calendar months would be more exact and less predictable (a February reset
+  # would shorten the interval); for a filter, a fixed 30.44 is both simpler to
+  # reason about and close enough. Set it to 30 or 31 if you prefer round numbers.
+  filter_days_per_month: "30.44"
+
 # Flash writes are batched every 5 minutes instead of the default 60 seconds. The
 # daily-energy total changes constantly and is saved on every publish, and several
 # `number` entities restore their value at boot too, so the default cadence adds up
@@ -56,6 +67,41 @@ preferences:
 external_components:
   - source: github://cdamman/ESPHome-Zehnder-RF
     refresh: always
+
+# When the filters were last changed, as a UTC epoch, kept across reboots and
+# power cuts. 0 means "not known yet" -- every entity built on it reads unknown
+# rather than guessing, and the interval below seeds it on the first boot that
+# has a clock.
+#
+# A date rather than a countdown on purpose: a filter ages in calendar time, and
+# a stored deadline would drift every time the interval is changed. This keeps
+# the fact ("changed on the 3rd") and derives the deadline from it.
+globals:
+  - id: ${devicename}_filters_changed_at
+    type: uint32_t
+    restore_value: true
+    initial_value: "0"
+
+# Everything filter-related needs to know what time it is, which is the one thing
+# this file does not declare: `time:` lives in the per-install config (both
+# committed ones use `id: homeassistant_time`, which is the id used below). A
+# board with no clock yet -- no Home Assistant connection since boot -- reports
+# these entities as unknown instead of counting from the epoch.
+interval:
+  - interval: 60s
+    then:
+      - lambda: |-
+          if (id(${devicename}_filters_changed_at) != 0) {
+            return;  // already have a reference date
+          }
+          auto now = id(homeassistant_time).now();
+          if (!now.is_valid()) {
+            return;  // no clock yet; try again next minute
+          }
+          // First boot with a clock: assume the filters are fresh. Anyone whose
+          // filters are older presses the button, which is the same code path.
+          id(${devicename}_filters_changed_at) = (uint32_t) now.timestamp;
+          ESP_LOGI("filters", "No filter-change date stored; starting the count from now");
 
 fan:
   - platform: zehnder
@@ -180,6 +226,28 @@ number:
     on_value:
       - component.update: ${devicename}_power
 
+  # How long a set of filters lasts, in months. Three is the usual figure for a
+  # ComfoFan; a clean house or a mild season stretches it, so it is a number
+  # entity rather than a constant -- set it to 4 or 6 from Home Assistant and the
+  # deadline moves at once, without a reflash.
+  - platform: template
+    name: "${name_filter_interval}"
+    id: ${devicename}_filter_interval
+    icon: mdi:air-filter
+    entity_category: config
+    unit_of_measurement: months
+    mode: box
+    min_value: 1
+    max_value: 24
+    step: 1
+    initial_value: ${filter_interval_months}
+    optimistic: true
+    restore_value: true
+    # Changing the interval moves the deadline, so recompute it now instead of
+    # leaving it stale for up to a minute.
+    on_value:
+      - component.update: ${devicename}_filter_due_on
+
 button:
   # No boost button: the fan entity's own on/off starts and ends the boost. A
   # boost of an unusual length is an automation setting the duration number and
@@ -203,6 +271,30 @@ button:
     name: "${name_restart}"
     entity_category: config
 
+  # Press this after changing the filters: it stores "now" as the new reference
+  # date and the count-down starts over. Filed under configuration, with the other
+  # buttons, so the device's controls stay down to the things you touch daily; the
+  # notification action in the README presses this same entity, and an entity
+  # category does not affect that.
+  - platform: template
+    name: "${name_filter_reset}"
+    id: ${devicename}_filter_reset
+    icon: mdi:air-filter
+    entity_category: config
+    on_press:
+      - lambda: |-
+          auto now = id(homeassistant_time).now();
+          if (!now.is_valid()) {
+            // Storing 0 would read as "never changed"; storing a bogus epoch
+            // would put the next change in 1970. Refuse instead, and say why.
+            ESP_LOGW("filters", "No clock yet -- not resetting the filter date. Try again once Home Assistant has connected.");
+            return;
+          }
+          id(${devicename}_filters_changed_at) = (uint32_t) now.timestamp;
+          ESP_LOGI("filters", "Filters marked as changed today; next change in %.0f months",
+                   id(${devicename}_filter_interval).state);
+      - component.update: ${devicename}_filter_due_on
+
 binary_sensor:
   # Live nRF905 SPI health (idle probe + config readback on each TX).
   # ON = healthy; OFF = SPI wedged -> check the 3.3 V rail.
@@ -210,6 +302,28 @@ binary_sensor:
   # No icon on purpose, unlike the RF sensors below: device_class connectivity
   # draws lan-connect / lan-disconnect and switches between the two with the
   # state, which an explicit icon would replace with a single static one.
+  # Filters overdue. device_class: problem is what makes Home Assistant treat this
+  # as something wrong with the device rather than a plain true/false: the value
+  # reads Problem / OK, and it is the entity an automation watches to put a
+  # notification on your phone (see the README). Being a diagnostic entity does not
+  # change that -- a state trigger fires on it the same way.
+  #
+  # Reads the due-date sensor rather than repeating its arithmetic, so the two can
+  # never disagree: if this says Problem, the date next to it is in the past.
+  - platform: template
+    name: "${name_filter_due}"
+    id: ${devicename}_filter_due
+    icon: mdi:air-filter
+    device_class: problem
+    entity_category: diagnostic
+    lambda: |-
+      auto now = id(homeassistant_time).now();
+      const float due_at = id(${devicename}_filter_due_on).state;
+      if (!now.is_valid() || std::isnan(due_at)) {
+        return {};  // no clock or no reference date yet: unknown, not "fine"
+      }
+      return (double) now.timestamp >= (double) due_at;
+
   - platform: template
     name: "${name_spi_healthy}"
     device_class: connectivity
@@ -277,6 +391,34 @@ sensor:
     accuracy_decimals: 0
     update_interval: 60s
     lambda: "return id(${devicename}_fan)->getFanPercentage();"
+
+  # --- Filters -------------------------------------------------------------
+  # When the filters are next due, as a date. Home Assistant renders a timestamp
+  # sensor as "3 November" -- and as "in 2 months" on the cards that show relative
+  # time -- so the deadline and roughly how far off it is both read from this one
+  # entity.
+  #
+  # The one formula in this feature: the problem flag reads this sensor rather than
+  # doing its own date arithmetic, so there is nothing to keep in step by hand.
+  #
+  # Sensor states are floats, so an epoch this size keeps only ~2-minute
+  # precision -- irrelevant for a date, and the same limitation ESPHome's own
+  # uptime timestamp sensor has.
+  - platform: template
+    name: "${name_filter_due_on}"
+    id: ${devicename}_filter_due_on
+    icon: mdi:calendar-end
+    device_class: timestamp
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: |-
+      const uint32_t changed_at = id(${devicename}_filters_changed_at);
+      const float months = id(${devicename}_filter_interval).state;
+      if (changed_at == 0 || std::isnan(months)) {
+        return NAN;
+      }
+      return (float) ((double) changed_at + (double) months * ${filter_days_per_month} * 86400.0);
 
   # --- RF diagnostics ------------------------------------------------------
   # Each of these carries its own icon: without one, Home Assistant falls back to
