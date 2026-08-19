@@ -386,13 +386,20 @@ Three things worth knowing:
   *Diagnostic*), the firmware is almost certainly right and Home Assistant is
   holding the category it recorded the first time it saw that entity: the entity
   registry stores `entity_category` at creation, and an entity that already exists
-  is not moved when the device re-announces itself with a new one. Deleting the
-  entity, or the device, and letting the integration re-create it is what applies
-  the change — the same workaround
+  is not moved when the device simply re-announces itself with a new one.
+
+  **Reconfigure** on the device (Settings → Devices & services → ESPHome → the
+  device → ⋮ → *Reconfigure*) applies it, and is the cheapest fix — verified on a
+  real install after a category change did not take. Deleting the entity or the
+  device and letting the integration re-create it also works and is what
   [ESPHome's own entity-category PR](https://github.com/esphome/esphome/pull/2636)
-  documents. Confirm which side you are looking at first: `esphome config` on your
-  own file prints the `entity_category:` the *next* build will carry, so if it says
-  `config` there, nothing in this repository can fix what the dashboard shows.
+  suggests, but it throws away any rename or area you had set, so try Reconfigure
+  first.
+
+  Confirm which side you are looking at before rebuilding anything: `esphome
+  config` on your own file prints the `entity_category:` the *next* build will
+  carry, so if it says `config` there, nothing in this repository can change what
+  the dashboard shows.
 
 ### Getting it onto your phone
 
