@@ -18,7 +18,7 @@ integration, which goes through the
 | `number` **Power 1-3** | Watts drawn at each speed, set from Home Assistant and kept across restarts |
 | `sensor` **Airflow** | Unit output in %, as the unit itself reports it |
 | `button` **Re-pair** | Re-runs the join handshake, for a unit whose pairing window is open |
-| **Filter reminder** | A configurable interval (3 months by default), the date they are next due, a `problem` flag once they are, and a button to press when they are changed — see [Filter change reminder](#filter-change-reminder) |
+| **Filter reminder** | A configurable interval in days (90 by default), the date they are next due, a `problem` flag once they are, and a button to press when they are changed — see [Filter change reminder](#filter-change-reminder) |
 
 The fan is the device's main control, so it is configured with `name: None` and
 inherits the device name (*Zehnder Fan*) rather than adding a word to it —
@@ -353,7 +353,7 @@ Four entities, no automation required for any of it to work:
 
 | Entity | Purpose |
 | --- | --- |
-| `number` **Filter interval** | How long a set of filters lasts, in months — 3 by default, set it to 4 or 6 and the deadline moves at once |
+| `number` **Filter interval** | How long a set of filters lasts, in days — 90 by default (the usual three months), and the deadline moves as soon as you change it |
 | `sensor` **Filter change due on** | When they are next due. Home Assistant renders a timestamp as *3 November*, and as *in 2 months* on the cards that show relative time (diagnostic) |
 | `binary_sensor` **Filter status** | `device_class: problem`, so its value reads *Problem* / *OK* and Home Assistant shows it as something wrong with the device. Filed under *Diagnostic*, which does not stop an automation from watching it |
 | `button` **Filters changed** | Press it after changing them: today becomes the new reference date and the deadline moves out by one interval. Filed under *Configuration* on the device page, with the other buttons |
@@ -364,11 +364,11 @@ interval. It survives reboots and power cuts (`globals` with `restore_value`), w
 the same up-to-5-minute window as every other stored value here, since
 `flash_write_interval` is `5min`.
 
-A month is counted as **30.44 days** (the average Gregorian month), so three months
-is 91 days. Calendar months would be more exact and less predictable — a reset in
-February would shorten the interval — and for a filter this is both simpler to
-reason about and close enough. `filter_days_per_month` is a substitution, so
-`30` or `31` is a one-line override in your own config.
+The interval is in **days**, not months, because a month is not a length: counting
+in months means picking a fudge (30? 31? 30.44?) and then explaining it forever,
+and *120 days* is no harder to type than *4 months*. `filter_interval_days` is a
+substitution, so a different starting value is a one-line override in your own
+config — though the number entity is the place to change it once it is running.
 
 Three things worth knowing:
 
