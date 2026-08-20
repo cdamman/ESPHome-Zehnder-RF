@@ -448,12 +448,27 @@ before pasting.
 
 ### About the "maintenance section"
 
-There is no maintenance section to put this in: Home Assistant has exactly three
-entity categories — primary (none), `config` and `diagnostic`. A `maintenance`
-category was proposed for precisely this kind of entity and the architecture team
-[closed the proposal](https://github.com/home-assistant/architecture/discussions/1016),
-to be reconsidered later. So the closest real options, in the order I would try
-them:
+There are two different things by that name, and this entity reaches neither of
+them on its own.
+
+There is no maintenance **entity category**: Home Assistant has exactly three —
+primary (none), `config` and `diagnostic`. One was proposed for precisely this
+kind of entity and the architecture team
+[closed the proposal](https://github.com/home-assistant/architecture/discussions/1016).
+
+There *is* a built-in **Maintenance dashboard**, added in
+[2026.5](https://www.home-assistant.io/blog/2026/05/06/release-20265/) and
+reachable under *Overview → Summaries*. It will not show this sensor either: it
+"focuses on what is probably the most-requested view of all: your batteries",
+and collects numeric battery-percentage sensors. Not `problem` binary sensors —
+not even binary *battery* ones, which is
+[an open complaint](https://github.com/home-assistant/frontend/issues/51905).
+Nothing set in this config changes that; no `device_class` or `entity_category`
+puts a filter warning on that card. The only way in is to dress the filter life
+up as a battery percentage, which HA would then treat as a battery everywhere
+else too.
+
+So the closest real options, in the order I would try them:
 
 - **`device_class: problem`**, which is what **Filter status** already
   uses. It is Home Assistant's own way of saying "this device needs attention",
