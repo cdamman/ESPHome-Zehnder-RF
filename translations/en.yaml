@@ -33,6 +33,7 @@ substitutions:
   # Problem" without the label having to carry the alarm itself.
   name_filter_interval: "Filter interval"
   name_filter_due_on: "Filter change due on"
+  name_filter_life: "Filter life"
   name_filter_due: "Filter status"
   name_filter_reset: "Filters changed"
 

@@ -31,6 +31,7 @@ substitutions:
   # filtres : Problème » sans que le libellé ait à porter l'alerte lui-même.
   name_filter_interval: "Intervalle de changement des filtres"
   name_filter_due_on: "Changement des filtres prévu le"
+  name_filter_life: "Durée de vie des filtres"
   name_filter_due: "État des filtres"
   name_filter_reset: "Filtres changés"
 

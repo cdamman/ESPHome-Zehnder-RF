@@ -355,6 +355,7 @@ Four entities, no automation required for any of it to work:
 | --- | --- |
 | `number` **Filter interval** | How long a set of filters lasts, in days — 90 by default (the usual three months), and the deadline moves as soon as you change it |
 | `sensor` **Filter change due on** | When they are next due. Home Assistant renders a timestamp as *3 November*, and as *in 2 months* on the cards that show relative time (diagnostic) |
+| `sensor` **Filter life** | Share of the interval left, 100 % → 0 %, shaped as a battery so it lands on the Maintenance dashboard. **Disabled by default** — see [below](#about-the-maintenance-section) |
 | `binary_sensor` **Filter status** | `device_class: problem`, so its value reads *Problem* / *OK* and Home Assistant shows it as something wrong with the device. Filed under *Diagnostic*, which does not stop an automation from watching it |
 | `button` **Filters changed** | Press it after changing them: today becomes the new reference date and the deadline moves out by one interval. Filed under *Configuration* on the device page, with the other buttons |
 
@@ -463,12 +464,24 @@ reachable under *Overview → Summaries*. It will not show this sensor either: i
 and collects numeric battery-percentage sensors. Not `problem` binary sensors —
 not even binary *battery* ones, which is
 [an open complaint](https://github.com/home-assistant/frontend/issues/51905).
-Nothing set in this config changes that; no `device_class` or `entity_category`
-puts a filter warning on that card. The only way in is to dress the filter life
-up as a battery percentage, which HA would then treat as a battery everywhere
-else too.
+No `device_class` or `entity_category` puts a `problem` sensor on that card. The
+only way in is to dress the filter life up as a battery percentage — so that is
+what **Filter life** does, and why it is **disabled by default**:
 
-So the closest real options, in the order I would try them:
+- it reports the share of the interval left, 100 % the day the filters are
+  changed and 0 % on the deadline, so on the Maintenance dashboard the filters
+  sit next to the real batteries and drain towards empty as the deadline comes;
+- enable it per device in *Settings → Devices & services → ESPHome → your device
+  → **Filter life** → Enable*. Nothing appears until you do;
+- the cost is that Home Assistant then believes it **is** a battery: battery
+  cards, low-battery automations and the device's battery indicator all pick it
+  up. That is the trade for being on that dashboard, and it is why this is opt-in
+  rather than on for everyone;
+- it is `diagnostic`, where real battery sensors live. If it fails to show up on
+  the dashboard, set `filter_life_entity_category: ""` in your own config to make
+  it a primary entity instead.
+
+The other options, which stay honest about what the thing is:
 
 - **`device_class: problem`**, which is what **Filter status** already
   uses. It is Home Assistant's own way of saying "this device needs attention",

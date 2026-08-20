@@ -41,6 +41,13 @@ substitutions:
   # usual three months.
   filter_interval_days: "90"
 
+  # Entity category of the battery-shaped "filter life" sensor (see it below).
+  # Diagnostic matches where real battery sensors live, which is what Home
+  # Assistant's Maintenance dashboard collects. Set it to "" to make the sensor a
+  # primary entity instead, if that dashboard turns out not to look at diagnostic
+  # ones.
+  filter_life_entity_category: "diagnostic"
+
 # Flash writes are batched every 5 minutes instead of the default 60 seconds. The
 # daily-energy total changes constantly and is saved on every publish, and several
 # `number` entities restore their value at boot too, so the default cadence adds up
@@ -418,6 +425,58 @@ sensor:
         return NAN;
       }
       return (float) ((double) changed_at + (double) days * 86400.0);
+
+  # How much of the interval is left, as a percentage: 100 % the day they are
+  # changed, 0 % on the deadline. Reads the due date rather than recomputing it,
+  # like the problem flag does.
+  #
+  # `device_class: battery` is a deliberate lie, and the only way onto Home
+  # Assistant's built-in Maintenance dashboard (2026.5): that view collects
+  # numeric battery-percentage sensors and nothing else -- not `problem` binary
+  # sensors, not even binary battery ones. Dressed up like this, the filters show
+  # there next to the real batteries and fall towards empty as the deadline
+  # approaches, which is exactly the reading you want.
+  #
+  # The cost is everywhere else: Home Assistant will believe this is a battery --
+  # battery cards, "low battery" automations and the device's battery indicator
+  # all pick it up. That is why it ships `disabled_by_default: true`: nobody gets
+  # a phantom battery unless they turn it on (Settings -> Devices -> this device
+  # -> the entity -> Enable).
+  #
+  # Diagnostic, like nearly every real battery sensor in Home Assistant, which is
+  # what that dashboard is built to collect. If it fails to appear there, set
+  # `filter_life_entity_category: ""` in your own config to make it a primary
+  # entity instead.
+  - platform: template
+    name: "${name_filter_life}"
+    id: ${devicename}_filter_life
+    # An explicit icon replaces the level-following battery icon: in a list of
+    # batteries, the point is to see at a glance that this one is the filters.
+    icon: mdi:air-filter
+    device_class: battery
+    state_class: measurement
+    unit_of_measurement: "%"
+    entity_category: ${filter_life_entity_category}
+    accuracy_decimals: 0
+    disabled_by_default: true
+    update_interval: 60s
+    lambda: |-
+      auto now = id(homeassistant_time).now();
+      const float due_at = id(${devicename}_filter_due_on).state;
+      const float days = id(${devicename}_filter_interval).state;
+      if (!now.is_valid() || std::isnan(due_at) || std::isnan(days) || days <= 0.0f) {
+        return NAN;
+      }
+      const double seconds_left = (double) due_at - (double) now.timestamp;
+      double percent = 100.0 * seconds_left / ((double) days * 86400.0);
+      // Clamped rather than left to run negative: a battery reading below 0 % or
+      // above 100 % is not something Home Assistant draws sensibly.
+      if (percent < 0.0) {
+        percent = 0.0;
+      } else if (percent > 100.0) {
+        percent = 100.0;
+      }
+      return (float) percent;
 
   # --- RF diagnostics ------------------------------------------------------
   # Each of these carries its own icon: without one, Home Assistant falls back to
