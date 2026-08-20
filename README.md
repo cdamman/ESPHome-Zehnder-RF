@@ -371,8 +371,13 @@ and *120 days* is no harder to type than *4 months*. `filter_interval_days` is a
 substitution, so a different starting value is a one-line override in your own
 config — though the number entity is the place to change it once it is running.
 
-Three things worth knowing:
+Four things worth knowing:
 
+- **Changing something updates it at once.** Pressing **Filters changed** or moving
+  **Filter interval** republishes the due date and **Filter life** immediately
+  (`component.update`), rather than leaving them on their last polled value for up
+  to a minute. **Filter status** needs no such nudge — a template binary sensor
+  re-evaluates every loop, so it clears within milliseconds.
 - **It needs a clock.** `time:` lives in your per-install config (both committed
   ones declare `id: homeassistant_time`, which is the id the common config reads).
   Until Home Assistant has connected once, every entity above reads *unknown*

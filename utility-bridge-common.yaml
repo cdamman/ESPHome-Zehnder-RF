@@ -250,9 +250,14 @@ number:
     optimistic: true
     restore_value: true
     # Changing the interval moves the deadline, so recompute it now instead of
-    # leaving it stale for up to a minute.
+    # leaving it stale for up to a minute. Order matters: "Filter life" reads the
+    # due date, so the date has to be republished first or the gauge would just
+    # recompute the same answer from the old deadline. The problem binary sensor
+    # needs no line here -- template binary sensors re-evaluate every loop, so it
+    # follows the new date on its own.
     on_value:
       - component.update: ${devicename}_filter_due_on
+      - component.update: ${devicename}_filter_life
 
 button:
   # No boost button: the fan entity's own on/off starts and ends the boost. A
@@ -299,7 +304,11 @@ button:
           id(${devicename}_filters_changed_at) = (uint32_t) now.timestamp;
           ESP_LOGI("filters", "Filters marked as changed today; next change in %.0f days",
                    id(${devicename}_filter_interval).state);
+      # Same refresh chain as the interval number, and for the same reason:
+      # pressing this must clear the alarm and put the gauge back to 100 % right
+      # away, not at the next minute tick.
       - component.update: ${devicename}_filter_due_on
+      - component.update: ${devicename}_filter_life
 
 binary_sensor:
   # Live nRF905 SPI health (idle probe + config readback on each TX).
