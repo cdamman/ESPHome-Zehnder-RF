@@ -355,7 +355,7 @@ Four entities, no automation required for any of it to work:
 | --- | --- |
 | `number` **Filter interval** | How long a set of filters lasts, in days — 90 by default (the usual three months), and the deadline moves as soon as you change it |
 | `sensor` **Filter change due on** | When they are next due. Home Assistant renders a timestamp as *3 November*, and as *in 2 months* on the cards that show relative time (diagnostic) |
-| `sensor` **Filter life** | Share of the interval left, 100 % → 0 %, shaped as a battery so it lands on the Maintenance dashboard. **Disabled by default** — see [below](#about-the-maintenance-section) |
+| `sensor` **Filter life** | Share of the interval left, 100 % → 0 %, shaped as a battery so it lands on the Maintenance dashboard — with the consequences that carries, see [below](#about-the-maintenance-section) (diagnostic) |
 | `binary_sensor` **Filter status** | `device_class: problem`, so its value reads *Problem* / *OK* and Home Assistant shows it as something wrong with the device. Filed under *Diagnostic*, which does not stop an automation from watching it |
 | `button` **Filters changed** | Press it after changing them: today becomes the new reference date and the deadline moves out by one interval. Filed under *Configuration* on the device page, with the other buttons |
 
@@ -466,17 +466,22 @@ not even binary *battery* ones, which is
 [an open complaint](https://github.com/home-assistant/frontend/issues/51905).
 No `device_class` or `entity_category` puts a `problem` sensor on that card. The
 only way in is to dress the filter life up as a battery percentage — so that is
-what **Filter life** does, and why it is **disabled by default**:
+what **Filter life** does:
 
 - it reports the share of the interval left, 100 % the day the filters are
   changed and 0 % on the deadline, so on the Maintenance dashboard the filters
   sit next to the real batteries and drain towards empty as the deadline comes;
-- enable it per device in *Settings → Devices & services → ESPHome → your device
-  → **Filter life** → Enable*. Nothing appears until you do;
 - the cost is that Home Assistant then believes it **is** a battery: battery
   cards, low-battery automations and the device's battery indicator all pick it
-  up. That is the trade for being on that dashboard, and it is why this is opt-in
-  rather than on for everyone;
+  up. It ships enabled anyway — a maintenance reading you have to go and switch
+  on is not much of a maintenance reading — so if a phantom battery is worse for
+  you than the dashboard entry is worth, drop it from your own config:
+
+  ```yaml
+  sensor:
+    - id: !remove zehnder_fan_filter_life
+  ```
+
 - it is `diagnostic`, where real battery sensors live. If it fails to show up on
   the dashboard, set `filter_life_entity_category: ""` in your own config to make
   it a primary entity instead.

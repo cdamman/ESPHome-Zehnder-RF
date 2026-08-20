@@ -437,11 +437,13 @@ sensor:
   # there next to the real batteries and fall towards empty as the deadline
   # approaches, which is exactly the reading you want.
   #
-  # The cost is everywhere else: Home Assistant will believe this is a battery --
-  # battery cards, "low battery" automations and the device's battery indicator
-  # all pick it up. That is why it ships `disabled_by_default: true`: nobody gets
-  # a phantom battery unless they turn it on (Settings -> Devices -> this device
-  # -> the entity -> Enable).
+  # The cost is everywhere else, and it applies to every install: Home Assistant
+  # will believe this is a battery -- battery cards, "low battery" automations and
+  # the device's battery indicator all pick it up. It ships enabled anyway,
+  # because a maintenance reading nobody has to go and switch on is the point of
+  # it; delete this sensor from your own config (`- id: !remove
+  # <devicename>_filter_life` under `sensor:`) if you would rather not have a
+  # phantom battery.
   #
   # Diagnostic, like nearly every real battery sensor in Home Assistant, which is
   # what that dashboard is built to collect. If it fails to appear there, set
@@ -458,7 +460,6 @@ sensor:
     unit_of_measurement: "%"
     entity_category: ${filter_life_entity_category}
     accuracy_decimals: 0
-    disabled_by_default: true
     update_interval: 60s
     lambda: |-
       auto now = id(homeassistant_time).now();
