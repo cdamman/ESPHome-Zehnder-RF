@@ -54,6 +54,29 @@ fan:
     network_id: 0xCB109EA2
     main_unit_id: 0xD9
     my_device_id: 0x86
+    # Both sender triggers, wired the way utility-bridge-common.yaml wires them, so
+    # the automation plumbing and every getter behind it is compiled here too and
+    # not only in the assembled config. This config has no text sensor on purpose,
+    # which is also what keeps clearTextSensor()'s USE_TEXT_SENSOR guard honest.
+    on_command:
+      - logger.log:
+          format: "command from 0x%02X (type 0x%02X, frame 0x%02X), from us: %d, from unit: %d"
+          args:
+            - "id(zehnder_fan)->getLastCommandId()"
+            - "id(zehnder_fan)->getLastCommandType()"
+            - "id(zehnder_fan)->getLastCommandFrame()"
+            - "id(zehnder_fan)->isLastCommandFromUs()"
+            - "id(zehnder_fan)->isLastCommandFromMainUnit()"
+      - lambda: 'ESP_LOGD("ci", "have command: %d", id(zehnder_fan)->haveLastCommand());'
+    on_answer:
+      - logger.log:
+          format: "answer from 0x%02X (type 0x%02X, frame 0x%02X), from unit: %d"
+          args:
+            - "id(zehnder_fan)->getLastAnswerId()"
+            - "id(zehnder_fan)->getLastAnswerType()"
+            - "id(zehnder_fan)->getLastAnswerFrame()"
+            - "id(zehnder_fan)->isLastAnswerFromMainUnit()"
+      - lambda: 'ESP_LOGD("ci", "have answer: %d", id(zehnder_fan)->haveLastAnswer());'
 
 # Exercise the boost / timer API the way utility-bridge-common.yaml drives it, so a signature
 # change breaks CI instead of a user's build.

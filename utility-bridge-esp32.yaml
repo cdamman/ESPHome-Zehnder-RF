@@ -43,9 +43,20 @@
 # has the same `refresh: always` on its own `external_components:` block, for the
 # same reason. The cost of both is a git fetch per build, and a build that needs
 # the network -- set both back to 1d once you stop following changes upstream.
+#
+# Same story one level down, for *which* revision rather than how fresh a copy of
+# it is: the component is fetched at `component_ref`, and a lambda in the common
+# config calls a method in that component, so the two have to come from the same
+# revision. `ref` below and `component_ref` in the substitutions are therefore
+# always set together -- change one, change the other.
 substitutions:
   devicename: zehnder_fan
   upper_devicename: Zehnder Fan
+
+  # Keep this equal to the package's `ref` at the bottom of the file: it is the
+  # revision the C++ component is built from, and YAML from one revision does not
+  # compile against C++ from another.
+  component_ref: main
 
 esphome:
   name: ${devicename}

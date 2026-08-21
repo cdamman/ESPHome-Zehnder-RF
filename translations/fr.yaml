@@ -60,4 +60,69 @@ substitutions:
   name_ip_address: "Adresse IP"
   name_network_id: "RF: ID réseau"
   name_main_unit_id: "RF: ID de l'unité"
-  name_controller_id: "RF: ID contrôleur"
+  name_controller_id: "RF: ID télécommande"
+  # Quatre entités pour deux événements : ce qui a été demandé et par qui, ce qui a
+  # répondu et de qui. Séparées plutôt que concaténées, parce qu'une entité par
+  # fait se filtre, se trace et se lit dans un tableau de bord ; recoller les deux
+  # est l'affaire d'un template si besoin.
+  #
+  # Le préfixe porte l'ordre, pas seulement le sens. Home Assistant trie les
+  # entités d'une section par nom, et il n'y a aucun moyen de lui imposer un ordre
+  # ailleurs -- donc « RF Com: » avant « RF Resp: » (C avant R) place la paire
+  # commande avant la paire réponse, et à l'intérieur d'une paire le libellé suivant
+  # fait le reste : Dernière commande avant Envoyée par, Dernière réponse avant
+  # Reçue de. Renommer un de ces quatre libellés, c'est donc décider de sa place.
+  #
+  # Le sens est déjà dans « Com » / « Resp », donc les libellés n'ont pas de flèche :
+  # ce sont les icônes qui la portent (message-arrow-right-outline vers l'unité,
+  # message-arrow-left-outline au retour), partagées par les deux entités d'une même
+  # paire pour qu'elles se lisent comme un couple.
+  name_last_command: "RF Com: Dernière commande"
+  name_last_command_from: "RF Com: Envoyée par"
+  name_last_answer: "RF Resp: Dernière réponse"
+  name_last_answer_from: "RF Resp: Reçue de"
+
+  # Types de trame, tels qu'affichés par les deux entités « quoi » : « <nom> (<hex>)
+  # », soit « Réglage de vitesse (0x02) ». L'octet reste affiché parce que c'est lui
+  # qu'on retrouve dans les logs et dans la documentation du protocole -- écrit 0x02
+  # comme eux -- et le nom est là pour ne pas avoir à les relire.
+  #
+  # Deux listes disjointes : les trames de réponse (0x05, 0x07, 0x0C, 0x1D) ne peuvent
+  # apparaître que côté réponse, et les autres que côté commande -- c'est le
+  # composant qui trie.
+  value_frame_set_voltage: "Réglage de tension"
+  value_frame_set_speed: "Réglage de vitesse"
+  value_frame_set_timer: "Réglage avec minuteur"
+  value_frame_join_request: "Demande d'appairage"
+  value_frame_join_open: "Appairage ouvert"
+  value_frame_0b: "Trame non documentée"
+  value_frame_query_network: "Interrogation réseau"
+  value_frame_query: "Interrogation"
+
+  value_frame_set_speed_reply: "Vitesse confirmée"
+  value_frame_settings: "Réglages"
+  value_frame_join_ack: "Appairage confirmé"
+  value_frame_set_voltage_reply: "Tension confirmée"
+
+  # Pour un octet que le décodeur ne connaît pas : le nom manque, l'octet reste.
+  value_frame_unknown: "Trame inconnue"
+
+  # Appareils, tels qu'affichés par les deux entités « qui » : « <nom> (<ID>) », soit
+  # « Télécommande (0x06) » -- même forme que les types de trame ci-dessus, pour que
+  # les quatre valeurs se lisent de la même façon. La préposition est dans le
+  # libellé (« Envoyée par »,
+  # « Reçue de »), donc les noms sont nus et servent aux deux.
+  #
+  # L'unité appairée est distinguée de toute autre unité du réseau, parce que voir
+  # « Autre unité » est une surprise bien plus intéressante. Les quatre entités
+  # repassent à « inconnu » dès que leur enregistrement est périmé (une demi-période
+  # d'interrogation), donc il n'y a pas de texte « rien pour l'instant » à traduire.
+  # « Cette télécommande » et pas « ce contrôleur » : pour le protocole, ce montage
+  # *est* une télécommande, type d'appareil 0x03, exactement comme celle du mur --
+  # l'unité ne fait aucune différence entre les deux.
+  value_device_us: "Cette télécommande"
+  value_device_main_unit: "Unité"
+  value_device_other_unit: "Autre unité"
+  value_device_remote: "Télécommande"
+  value_device_co2: "Capteur CO2"
+  value_device_unknown: "Appareil inconnu"

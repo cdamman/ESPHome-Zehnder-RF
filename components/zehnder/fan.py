@@ -1,5 +1,6 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
+from esphome import automation
 from esphome.components import fan
 from esphome.const import CONF_CHANNEL, CONF_ID, CONF_MODEL, CONF_UPDATE_INTERVAL
 
@@ -12,6 +13,14 @@ zehnder_ns = cg.esphome_ns.namespace("zehnder")
 ZehnderRF = zehnder_ns.class_("ZehnderRF", cg.Component, fan.Fan)
 
 CONF_NRF905 = "nrf905"
+
+# Fired when the record of "who last commanded the fan" changes -- another remote
+# pressed, a command sent from here -- and again when it goes stale a minute
+# later. `on_answer` is the same for the unit's replies. Meant for refreshing a
+# diagnostic the moment it changes, the way fan's own `on_state` refreshes the
+# derived sensors. Queries are in neither: see the component's isPollFrame().
+CONF_ON_COMMAND = "on_command"
+CONF_ON_ANSWER = "on_answer"
 
 # Optional: pin the paired identity (read off the three diagnostic entities) so it
 # survives a flash erase / fresh install without re-running discovery. network_id,
@@ -138,6 +147,10 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_MY_DEVICE_TYPE, default=0x03): cv.hex_uint8_t,
             cv.Optional(CONF_MY_DEVICE_ID): cv.hex_uint8_t,
             cv.Optional(CONF_SELF_HEAL_AFTER, default=10): cv.uint32_t,
+            cv.Optional(CONF_ON_COMMAND): automation.validate_automation(
+                single=True
+            ),
+            cv.Optional(CONF_ON_ANSWER): automation.validate_automation(single=True),
         }
     )
     .extend(cv.COMPONENT_SCHEMA),
@@ -165,6 +178,16 @@ async def to_code(config):
     cg.add(var.set_boost_speed(config[CONF_BOOST_SPEED]))
     cg.add(var.set_revert_speed(config[CONF_REVERT_SPEED]))
     cg.add(var.set_timer_minutes(config[CONF_BOOST_DURATION].total_minutes))
+
+    if CONF_ON_COMMAND in config:
+        await automation.build_automation(
+            var.get_command_trigger(), [], config[CONF_ON_COMMAND]
+        )
+
+    if CONF_ON_ANSWER in config:
+        await automation.build_automation(
+            var.get_answer_trigger(), [], config[CONF_ON_ANSWER]
+        )
 
     if all(k in config for k in CONF_PAIRING_KEYS):
         cg.add(

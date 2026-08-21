@@ -48,6 +48,18 @@ substitutions:
   # ones.
   filter_life_entity_category: "diagnostic"
 
+  # Which revision of the C++ component to build against. This has to match the
+  # revision this file itself came from, because the two are versioned together:
+  # a lambda here calls a method there. Left unpinned, the component would always
+  # come from the default branch, so pulling this file from any other ref -- a
+  # feature branch, a tag, a commit -- would compile new YAML against old C++ and
+  # fail with "class ZehnderRF has no member named ...".
+  #
+  # So: set this to the same `ref` you gave the package pull in your per-install
+  # config, and the mismatch cannot happen. Your own substitution wins over this
+  # default.
+  component_ref: main
+
 # Flash writes are batched every 5 minutes instead of the default 60 seconds. The
 # daily-energy total changes constantly and is saved on every publish, and several
 # `number` entities restore their value at boot too, so the default cadence adds up
@@ -58,15 +70,17 @@ substitutions:
 preferences:
   flash_write_interval: 5min
 
-# `refresh: always` rather than ESPHome's 1d default: this file and the component
-# it declares below are versioned together, and a cached copy of one against a
-# fresh copy of the other is exactly how you get "[option] is an invalid option
-# for [fan.zehnder]" -- the new config reaching yesterday's component clone. The
-# cost is a git fetch per build, and a build that needs the network -- set it
+# The component is pinned to `component_ref` (above) so it is fetched from the
+# same revision as this file, and `refresh: always` replaces ESPHome's 1d default
+# so that revision is re-read on every build. Both exist for the same reason: this
+# file and the component are versioned together, and any copy of one paired with a
+# different copy of the other is exactly how you get "[option] is an invalid option
+# for [fan.zehnder]" or "class ZehnderRF has no member named ...". The cost of
+# `always` is a git fetch per build, and a build that needs the network -- set it
 # back to 1d, here and on the package pull in your per-install config, once you
 # stop following changes upstream.
 external_components:
-  - source: github://cdamman/ESPHome-Zehnder-RF
+  - source: github://cdamman/ESPHome-Zehnder-RF@${component_ref}
     refresh: always
 
 # When the filters were last changed, as a UTC epoch, kept across reboots and
@@ -150,6 +164,17 @@ fan:
       - component.update: ${devicename}_power
       - component.update: ${devicename}_timer_remaining
       - component.update: ${devicename}_airflow
+    # Same idea, pushed from the radio instead of from the fan's state: these fire
+    # when someone commands the fan (a query counts), when the unit answers, and
+    # again when either record goes stale half an interval later -- so the two
+    # diagnostics at the end of this file are current before the frame is even
+    # handled, and clear themselves on time.
+    on_command:
+      - component.update: ${devicename}_last_command
+      - component.update: ${devicename}_last_command_from
+    on_answer:
+      - component.update: ${devicename}_last_answer
+      - component.update: ${devicename}_last_answer_from
 
 number:
   # The integration's "timer duration" number: 1 to 240 min, kept across
@@ -558,8 +583,10 @@ text_sensor:
   # Three hex strings that look alike and mean quite different things, which is
   # exactly how they get copied into the wrong option. So each one is drawn as the
   # thing it identifies rather than as a generic id: the network, the ventilation
-  # unit (the same icon the fan entity carries), and this controller -- a remote
-  # control as far as the protocol is concerned, device type 0x03.
+  # unit (the same icon the fan entity carries), and this board -- which is a remote
+  # control as far as the protocol is concerned, device type 0x03, hence "Remote id"
+  # rather than "Controller id". The substitution key stays name_controller_id: it
+  # is already released, and renaming it would silently drop anyone's override.
   - platform: template
     name: "${name_network_id}"
     icon: mdi:access-point-network
@@ -586,4 +613,169 @@ text_sensor:
     lambda: |-
       char buf[6];
       snprintf(buf, sizeof(buf), "0x%02X", id(${devicename}_fan)->getMyDeviceId());
+      return std::string(buf);
+
+  # What is happening on this network, in four entities: the last command and who
+  # sent it, the last answer and who it came from.
+  #
+  #   RF Com:  Last command     Set speed (0x02)
+  #   RF Com:  Sent by          Remote (0x06)
+  #   RF Resp: Last answer      Settings (0x07)
+  #   RF Resp: Received from    Unit (0x2D)
+  #
+  # The names are what puts them in that order: Home Assistant sorts a section's
+  # entities by name and offers nothing else, so "RF Com: " sorts before
+  # "RF Resp: " and each pair's second entity sorts after its first. The icon then
+  # carries the direction -- one per direction, shared by the two entities of a
+  # pair, so one glance says whether this is something going to the unit or
+  # something coming back from it.
+  #
+  # Four rather than two glued strings, because one fact per entity is what Home
+  # Assistant is good at: "sent by" can be filtered and graphed on its own, and a
+  # dashboard that wants the sentence can template it back together. The hex byte
+  # stays next to the frame name because that is what appears in the logs and in
+  # the protocol notes.
+  #
+  # Commands and answers are kept apart because they would bury each other: the
+  # unit answers every command within milliseconds, so a single "last frame"
+  # reading would say "the unit" forever and a wall remote press, the thing worth
+  # seeing, would never show.
+  #
+  # Commands include our own, the 30 s query among them: half the time the answer
+  # to "who commanded the fan" is Home Assistant, and saying so is more useful
+  # than staying silent about it. The unit's reply to a query is an answer like
+  # any other, which makes the answer pair a "the link is alive" reading too.
+  #
+  # All four are pushed by the component (`on_command:` / `on_answer:` on the fan
+  # above, two entities each) and all four go back to unknown together, half a
+  # polling interval after the last frame -- 15 s at the default 30 s. Together on
+  # one clock, because a command and the answer it draws are milliseconds apart:
+  # clearing them separately could only ever mean one pair blanking a tick before
+  # the other, which reads as a glitch rather than as detail. Half an interval, so
+  # this controller's own query always lands in fields that have been allowed to
+  # lapse: what you read here happened just now, not at some point in the last
+  # hour. The component fires both triggers when the records lapse, so the
+  # entities clear themselves on time rather than being polled for a deadline the
+  # component already knows. Hence `update_interval: never` throughout.
+  #
+  # Explicitly not a signal strength: the nRF905 has no RSSI. It offers a
+  # carrier-detect pin that trips around -95 dBm and nothing finer, so no amount
+  # of code here can report how strong a frame was -- only what was sent and by
+  # whom. The closest link-quality readings this component can give are the
+  # CRC-error counter and the unit response rate above.
+  - platform: template
+    name: "${name_last_command}"
+    id: ${devicename}_last_command
+    icon: mdi:message-arrow-right-outline
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      auto *vmc = id(${devicename}_fan);
+      if (!vmc->haveLastCommand()) {
+        // Nothing recently: back to unknown, which a text sensor cannot say by
+        // returning a value -- hence the component's clear helper.
+        esphome::zehnder::ZehnderRF::clearTextSensor(id(${devicename}_last_command));
+        return {};
+      }
+      const uint8_t frame = vmc->getLastCommandFrame();
+      const char *what;
+      // Reply frames are not in this list: the component files those on the
+      // answer side, so they cannot reach this entity.
+      switch (frame) {
+        case 0x01: what = "${value_frame_set_voltage}"; break;
+        case 0x02: what = "${value_frame_set_speed}"; break;
+        case 0x03: what = "${value_frame_set_timer}"; break;
+        case 0x04: what = "${value_frame_join_request}"; break;
+        case 0x06: what = "${value_frame_join_open}"; break;
+        case 0x0B: what = "${value_frame_0b}"; break;
+        case 0x0D: what = "${value_frame_query_network}"; break;
+        case 0x10: what = "${value_frame_query}"; break;
+        default:   what = "${value_frame_unknown}"; break;
+      }
+      char buf[48];
+      snprintf(buf, sizeof(buf), "%s (0x%02X)", what, frame);
+      return std::string(buf);
+
+  - platform: template
+    name: "${name_last_command_from}"
+    id: ${devicename}_last_command_from
+    icon: mdi:message-arrow-right-outline
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      auto *vmc = id(${devicename}_fan);
+      if (!vmc->haveLastCommand()) {
+        esphome::zehnder::ZehnderRF::clearTextSensor(id(${devicename}_last_command_from));
+        return {};
+      }
+      const char *who;
+      if (vmc->isLastCommandFromUs()) {
+        who = "${value_device_us}";
+      } else if (vmc->isLastCommandFromMainUnit()) {
+        // The unit this controller is paired to, rather than any main unit.
+        who = "${value_device_main_unit}";
+      } else {
+        switch (vmc->getLastCommandType()) {
+          case 0x01: who = "${value_device_other_unit}"; break;
+          case 0x03: who = "${value_device_remote}"; break;
+          case 0x18: who = "${value_device_co2}"; break;
+          default:   who = "${value_device_unknown}"; break;
+        }
+      }
+      char buf[48];
+      snprintf(buf, sizeof(buf), "%s (0x%02X)", who, vmc->getLastCommandId());
+      return std::string(buf);
+
+  - platform: template
+    name: "${name_last_answer}"
+    id: ${devicename}_last_answer
+    icon: mdi:message-arrow-left-outline
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      auto *vmc = id(${devicename}_fan);
+      if (!vmc->haveLastAnswer()) {
+        esphome::zehnder::ZehnderRF::clearTextSensor(id(${devicename}_last_answer));
+        return {};
+      }
+      const uint8_t frame = vmc->getLastAnswerFrame();
+      const char *what;
+      // Only the four reply frame types can land here (see isAnswerFrame() in the
+      // component), so this list is short by construction rather than by neglect.
+      switch (frame) {
+        case 0x05: what = "${value_frame_set_speed_reply}"; break;
+        case 0x07: what = "${value_frame_settings}"; break;
+        case 0x0C: what = "${value_frame_join_ack}"; break;
+        case 0x1D: what = "${value_frame_set_voltage_reply}"; break;
+        default:   what = "${value_frame_unknown}"; break;
+      }
+      char buf[48];
+      snprintf(buf, sizeof(buf), "%s (0x%02X)", what, frame);
+      return std::string(buf);
+
+  - platform: template
+    name: "${name_last_answer_from}"
+    id: ${devicename}_last_answer_from
+    icon: mdi:message-arrow-left-outline
+    entity_category: diagnostic
+    update_interval: never
+    lambda: |-
+      auto *vmc = id(${devicename}_fan);
+      if (!vmc->haveLastAnswer()) {
+        esphome::zehnder::ZehnderRF::clearTextSensor(id(${devicename}_last_answer_from));
+        return {};
+      }
+      const char *who;
+      if (vmc->isLastAnswerFromMainUnit()) {
+        who = "${value_device_main_unit}";
+      } else {
+        switch (vmc->getLastAnswerType()) {
+          case 0x01: who = "${value_device_other_unit}"; break;
+          case 0x03: who = "${value_device_remote}"; break;
+          case 0x18: who = "${value_device_co2}"; break;
+          default:   who = "${value_device_unknown}"; break;
+        }
+      }
+      char buf[48];
+      snprintf(buf, sizeof(buf), "%s (0x%02X)", who, vmc->getLastAnswerId());
       return std::string(buf);

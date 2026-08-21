@@ -55,6 +55,18 @@ def sourced_files(path: Path) -> list[str]:
     return [name.strip() for line in listed for name in line.split(",")]
 
 
+def package_ref(path: Path) -> str | None:
+    """The `ref:` of the per-install config's package pull."""
+    found = re.search(r"^packages:\n(?:    .*\n|  \S.*\n)*?    ref: (\S+)$", path.read_text(encoding="utf-8"), re.M)
+    return found.group(1) if found else None
+
+
+def substitution_value(path: Path, key: str) -> str | None:
+    """The value a config gives one of its own substitutions."""
+    found = re.search(rf"^  {key}: (\S+)$", path.read_text(encoding="utf-8"), re.M)
+    return found.group(1) if found else None
+
+
 def main() -> int:
     languages = sorted(p for p in TRANSLATIONS.glob("*.yaml"))
     if not languages:
@@ -113,6 +125,35 @@ def main() -> int:
             failures.append(f"{device.name}: does not source {CONFIG.name}")
         if not any(name.startswith(f"{TRANSLATIONS.name}/") for name in sourced):
             failures.append(f"{device.name}: sources no language file, so no label resolves")
+
+    # 4. The YAML and the C++ component travel together: the package is pulled at
+    # `ref`, the component at `component_ref`, and a lambda in the common config
+    # calls a method in the component. Point them at different revisions and the
+    # build fails at compile time, in a lambda, with a message that names neither
+    # file ("class ZehnderRF has no member named ..."). Cheaper to catch here.
+    source = re.search(r"^  - source: (github://\S+)$", CONFIG.read_text(encoding="utf-8"), re.M)
+    if source is None:
+        failures.append(f"{CONFIG.name}: no github external_components source to check")
+    elif not source.group(1).endswith("@${component_ref}"):
+        failures.append(
+            f"{CONFIG.name}: the component source is '{source.group(1)}', which is not "
+            f"pinned to @${{component_ref}} -- it would come from the default branch"
+        )
+
+    for device in DEVICES:
+        pulled_at, built_from = package_ref(device), substitution_value(device, "component_ref")
+        if pulled_at is None:
+            failures.append(f"{device.name}: its package has no `ref:`, so the revision is unpinned")
+        elif built_from is None:
+            failures.append(
+                f"{device.name}: pulls the package at '{pulled_at}' but sets no "
+                f"`component_ref`, so the component comes from the default branch"
+            )
+        elif built_from != pulled_at:
+            failures.append(
+                f"{device.name}: pulls the YAML at '{pulled_at}' but builds the "
+                f"component from '{built_from}' -- the two have to match"
+            )
 
     if failures:
         print("Translation check failed:")
