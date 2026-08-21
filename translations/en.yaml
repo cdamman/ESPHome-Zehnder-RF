@@ -62,4 +62,67 @@ substitutions:
   name_ip_address: "IP address"
   name_network_id: "RF: Network id"
   name_main_unit_id: "RF: Unit id"
-  name_controller_id: "RF: Controller id"
+  name_controller_id: "RF: Remote id"
+  # Four entities for two events: what was asked and by whom, what answered and
+  # from whom. Separate rather than concatenated, because one entity per fact can
+  # be filtered, graphed and read in a dashboard; gluing two together is a template
+  # away if you want it.
+  #
+  # The prefix carries the ordering, not just the direction. Home Assistant sorts
+  # the entities of a section by name and offers no way to impose any other order,
+  # so "RF Com: " before "RF Resp: " (C before R) puts the command pair ahead of
+  # the answer pair, and inside a pair the rest of the label does the rest: Last
+  # command before Sent by, Last answer before Received from. Renaming one of
+  # these four labels therefore decides where it lands.
+  #
+  # The direction is already in "Com" / "Resp", so the labels carry no arrow: the
+  # icons carry it instead (message-arrow-right-outline going to the unit,
+  # message-arrow-left-outline coming back), shared by the two entities of a pair so
+  # they read as a couple.
+  name_last_command: "RF Com: Last command"
+  name_last_command_from: "RF Com: Sent by"
+  name_last_answer: "RF Resp: Last answer"
+  name_last_answer_from: "RF Resp: Received from"
+
+  # Frame types, as the two "what" entities report them: "<name> (<hex>)", as in
+  # "Set speed (0x02)". The byte stays on display because that is what appears in
+  # the logs and in the protocol notes -- written 0x02 as they write it -- and the
+  # name is there so you need not go and read them.
+  #
+  # Two disjoint lists: reply frames (0x05, 0x07, 0x0C, 0x1D) can only ever show up on the
+  # answer side and the rest only on the command side -- the component sorts them.
+  value_frame_set_voltage: "Set voltage"
+  value_frame_set_speed: "Set speed"
+  value_frame_set_timer: "Set speed with timer"
+  value_frame_join_request: "Join request"
+  value_frame_join_open: "Join window open"
+  value_frame_0b: "Undocumented frame"
+  value_frame_query_network: "Network query"
+  value_frame_query: "Device query"
+
+  value_frame_set_speed_reply: "Speed confirmed"
+  value_frame_settings: "Settings"
+  value_frame_join_ack: "Join confirmed"
+  value_frame_set_voltage_reply: "Voltage confirmed"
+
+  # For a byte the decoder does not know: the name is missing, the byte remains.
+  value_frame_unknown: "Unknown frame"
+
+  # Devices, as the two "who" entities report them: "<name> (<id>)", as in
+  # "Remote (0x06)" -- the same shape as the frame types above, so all four values
+  # read alike. The preposition is in the label ("Sent by", "Received from"), so
+  # the names are bare and serve both.
+  #
+  # The paired unit is called out separately from any other main unit on the
+  # network, because seeing "Another unit" is a much more interesting surprise. All
+  # four entities read unknown once their record goes stale (half a polling
+  # interval), so there is no "nothing yet" string to translate.
+  # "This remote", not "this controller": to the protocol this board *is* a remote,
+  # device type 0x03, exactly like the one on the wall -- the unit draws no
+  # distinction between the two.
+  value_device_us: "This remote"
+  value_device_main_unit: "Unit"
+  value_device_other_unit: "Another unit"
+  value_device_remote: "Remote"
+  value_device_co2: "CO2 sensor"
+  value_device_unknown: "Unknown device"

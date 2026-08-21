@@ -18,6 +18,7 @@ integration, which goes through the
 | `number` **Power 1-3** | Watts drawn at each speed, set from Home Assistant and kept across restarts |
 | `sensor` **Airflow** | Unit output in %, as the unit itself reports it |
 | `button` **Re-pair** | Re-runs the join handshake, for a unit whose pairing window is open |
+| `text_sensor` **RF Com: Last command** / **Sent by** / **RF Resp: Last answer** / **Received from** | The last command and the last answer, each split into what (*Set speed (0x02)*) and who (*Remote (0x06)*); all four go back to unknown after half a polling interval (diagnostic). No RSSI: the nRF905 cannot measure one, see [RF diagnostics](#rf-diagnostics-and-the-rssi-that-does-not-exist) |
 | **Filter reminder** | A configurable interval in days (90 by default), the date they are next due, a `problem` flag once they are, and a button to press when they are changed — see [Filter change reminder](#filter-change-reminder) |
 
 The fan is the device's main control, so it is configured with `name: None` and
@@ -232,6 +233,23 @@ fetch per build, and a build that needs the network — set both back to `1d` on
 you stop following changes here. (If you hit that error with a cached clone,
 deleting `.esphome/external_components` also clears it.)
 
+`refresh` decides how fresh a copy is; `component_ref` decides *which revision* it
+is a copy of, and that is a second way for the two halves to disagree. The package
+pull in your per-install config names its revision (`ref: main`), and the component
+fetch inside `utility-bridge-common.yaml` names its own — `github://…@${component_ref}`.
+Leave that unpinned and the component always comes from the default branch, so
+pulling the YAML from anywhere else pairs new YAML with old C++, and the build dies
+in a lambda:
+
+```
+error: 'class esphome::zehnder::ZehnderRF' has no member named 'haveLastCommand'
+```
+
+which names neither file. So `component_ref` and the package's `ref` are set
+together: point both at `main` to follow releases, or at the same branch or tag to
+try something before it lands. `tests/check_translations.py` fails if they drift
+apart.
+
 The D1 mini has no pins left for AM and CD, which nRF905-API also leaves
 unconnected. Nothing is lost for **AM**: it is bit 7 of the status register, which
 the component polls over SPI regardless. **CD** has no such fallback — the nRF905's
@@ -297,6 +315,8 @@ fan:
 | `network_id`, `main_unit_id`, `my_device_id` | — | Pin the pairing (all three together) so it survives a flash erase |
 | `main_unit_type`, `my_device_type` | `0x01`, `0x03` | RF types; only change them if your install differs |
 | `self_heal_after` | `10` | Polls without an answer before an automatic re-pair (0 disables) |
+| `on_command` | — | Automation fired when someone commands the fan (a query counts), and again when that goes stale — see below |
+| `on_answer` | — | Same, for the unit's replies |
 
 Methods available from a lambda: `startBoost(minutes)` (0 = configured
 duration), `cancelBoost()`, `setSpeed(speed, minutes)`,
@@ -314,6 +334,30 @@ the consumption at once instead of up to 30 s later:
       - component.update: zehnder_fan_timer_remaining
       - component.update: zehnder_fan_airflow
 ```
+
+`on_command` and `on_answer` are the same idea one layer down, pushed from the
+radio instead of from the fan's state. One fires when someone commands the fan —
+another remote pressed, or a command sent from here — the other when the unit
+replies, and both fire again a minute later when their record goes stale:
+
+```yaml
+    on_command:
+      - component.update: zehnder_fan_last_command
+      - component.update: zehnder_fan_last_command_from
+    on_answer:
+      - component.update: zehnder_fan_last_answer
+      - component.update: zehnder_fan_last_answer_from
+```
+
+They fire from the receive path in `loop()` context, before the frame reaches the
+protocol state machine, so an action sees the matching getters
+(`haveLastCommand()`, `getLastCommandId()`, `getLastCommandType()`,
+`getLastCommandFrame()`, `isLastCommandFromUs()`, `isLastCommandFromMainUnit()`,
+and the `…Answer…` equivalents) already updated — `getLastCommandFrame()` is the
+frame type, so an action can tell a set-speed from a query if it cares.
+They are plain ESPHome automations, so they can equally log the frame or notify
+Home Assistant. See [RF diagnostics](#rf-diagnostics-and-the-rssi-that-does-not-exist)
+for what each records and what it deliberately ignores.
 
 ## How the count-down works
 
@@ -512,6 +556,128 @@ The other options, which stay honest about what the thing is:
   [categories and labels](https://www.home-assistant.io/docs/organizing/categories/)
   are for — and which a dashboard can then filter on.
 
+## RF diagnostics, and the RSSI that does not exist
+
+The diagnostic entities cover the link: channel busy (ESP32 only, it needs the CD
+pin), frames received and sent, CRC errors, the unit response rate, the SPI health
+flag, and the three pairing ids.
+
+Four entities answer "what is happening on this network", split so that each holds
+one fact:
+
+| Entity | Reads |
+| --- | --- |
+| **RF Com: Last command** | *Set speed (0x02)* |
+| **RF Com: Sent by** | *Remote (0x06)* |
+| **RF Resp: Last answer** | *Settings (0x07)* |
+| **RF Resp: Received from** | *Unit (0x2D)* |
+
+The direction is in the prefix, so the icon carries it rather than the words: one
+icon per direction (`mdi:message-arrow-right-outline` going to the unit,
+`mdi:message-arrow-left-outline` coming back), shared by the two entities of a pair
+so they read as a couple.
+
+**The names are also what orders them.** Home Assistant sorts the entities of a
+device section by name and offers no other control, so the order lives in the
+labels: `RF Com: ` before `RF Resp: ` (C before R) puts the command pair ahead of
+the answer pair, and inside a pair the rest of the label finishes the job — *Last
+command* before *Sent by*, *Last answer* before *Received from*. The four also land
+together, ahead of the other `RF: …` diagnostics, because a space sorts before a
+colon: the frontend compares with `new Intl.Collator(language, {numeric: true})`
+and does not set `ignorePunctuation`. Rename one of these four and you are choosing
+where it goes.
+
+Four rather than two glued sentences, because one fact per entity is what Home
+Assistant is good at: *Sent by* can be filtered, graphed and used in a condition
+on its own, and a dashboard that wants the sentence can template it back together.
+The hex byte stays next to the frame name because that is what appears in the logs
+and in the protocol notes — the name is there so you need not go and read them.
+
+The radio listens continuously rather than only around its own polls, so this
+covers traffic that has nothing to do with this controller: press a button on a
+physical wall remote and it appears here. Every string comes from the language
+files; the two hex bytes do not.
+
+| Frame on the air | Last command / Sent by | Last answer / Received from |
+| --- | --- | --- |
+| Another remote sets the speed | *Set speed (0x02)* / *Remote (0x06)* | — |
+| The unit answers it | — | *Settings (0x07)* / *Unit (0x2D)* |
+| You change the fan from Home Assistant | *Set speed (0x02)* / *This remote (0x86)* | — |
+| This controller's periodic query | *Device query (0x10)* / *This remote (0x86)* | — |
+| Nothing for half a polling interval | unknown | unknown |
+
+All four clear at the same instant, on one clock: a command and the answer it
+draws are milliseconds apart, so separate deadlines could only ever mean one pair
+blanking a tick before the other — which reads as a glitch, not as detail.
+
+Two rules are worth knowing:
+
+**Queries count as commands, ours included.** Asking the unit for its settings is
+traffic, and these entities show what is on the air. This is what the staleness
+window is for: the records lapse after **half the polling interval** — 15 s at
+the default `update_interval: 30s` — so this controller's own query always lands
+in a field that has been allowed to go unknown first. What you read there
+happened just now, not at some point in the last hour. Retune the polling and the
+window follows it.
+
+**Answers are told apart by frame type, not by who sent them.** The protocol
+answers a set-speed and a device query with the same `0x07` FAN_SETTINGS frame,
+so "what came back" cannot be deduced from "what was asked" — but a reply frame
+type (`0x05`, `0x07`, `0x0C`, `0x1D`) is a reply whoever it is addressed to. That
+also means the two `value_frame_*` lists in the language files are disjoint by
+construction: reply names can only ever surface in *Last answer*, the rest only in
+*Last command*.
+
+Both are pushed by the component rather than polled. The `zehnder` fan platform
+exposes `on_command:` and `on_answer:` automations — the same shape as the fan's
+built-in `on_state`, which is what already refreshes the consumption and timer
+sensors:
+
+```yaml
+fan:
+  - platform: zehnder
+    on_command:
+      - component.update: zehnder_fan_last_command
+      - component.update: zehnder_fan_last_command_from
+    on_answer:
+      - component.update: zehnder_fan_last_answer
+      - component.update: zehnder_fan_last_answer_from
+```
+
+They fire from the radio's receive path, in `loop()` context, before the frame
+reaches the protocol state machine, so a diagnostic is current by the time Home
+Assistant is told anything at all — and they fire again when a record goes stale,
+so the entities clear themselves on time instead of being polled for a deadline
+the component already knows — both triggers fire on that one lapse, which is what
+makes the four blank together. Hence `update_interval: never` on all four sensors:
+there is nothing a poll could add.
+
+Going back to **unknown** is not something a text sensor can do on its own —
+`publish_state()` always marks a state as present, and `text_sensor`, unlike
+`sensor` with its NAN, has no `invalidate_state()`. So the component provides
+`ZehnderRF::clearTextSensor()`, which clears the state flag and pushes the state
+itself; that is what each of the four lambdas calls when its record has gone
+stale.
+
+There is **no RSSI**, and none can be added. The nRF905 does not measure signal
+strength: its only receive-side indication is a Carrier Detect pin that toggles
+somewhere around −95 to −105 dBm, per
+[the datasheet](https://cdn.sparkfun.com/assets/5/8/c/f/8/nRF905_rev1_1.pdf) — a
+threshold, not a measurement, and one that is necessarily true for any frame that
+arrived at all. So a "signal strength of the last message" is not a missing
+feature here; it is not something this radio can report. The closest readings this
+component can offer are indirect:
+
+- **RF: CRC errors** — frames that arrived corrupted. A rising count against a
+  steady frame count is the usual sign of a marginal link.
+- **RF: Unit response rate** — share of polls the unit answered. This is the one
+  to watch after moving the board or its antenna.
+- **RF: Channel busy** — how much of the time a carrier is present at all, on a
+  board that wires CD. Congestion rather than strength.
+
+If you want signal strength, that means different silicon (a CC1101 or an SX127x
+would give you an RSSI register); it is not a firmware change.
+
 ## Pairing
 
 On first boot with no stored identity, the component starts discovery. The unit has
@@ -521,7 +687,7 @@ current link first, so the fan is uncontrollable until the join succeeds. With t
 survive a reboot — the pinned values are re-applied at boot.
 
 Once paired, the identifiers show up as three diagnostic entities (*RF: Network
-id*, *RF: Unit id*, *RF: Controller id*); pinning them in YAML avoids having to
+id*, *RF: Unit id*, *RF: Remote id*); pinning them in YAML avoids having to
 re-pair after a flash erase. They belong to one unit, so `utility-bridge-common.yaml` does not
 carry them — they go in your own config, extending the fan the package declares
 (the block is there, commented, at the end of each per-install config):

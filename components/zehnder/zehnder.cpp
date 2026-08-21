@@ -3,6 +3,7 @@
 
 #include "zehnder.h"
 #include "esphome/core/log.h"
+#include "esphome/core/controller_registry.h"
 #include "esphome/core/application.h"
 
 namespace esphome {
@@ -358,6 +359,10 @@ void ZehnderRF::loop(void) {
   // Run RF handler
   this->rfHandler();
 
+  // Let a recorded sender go stale on time (senderStaleMs_()), which fires the
+  // matching trigger so the diagnostic clears itself.
+  this->expireSenders_();
+
   switch (this->state_) {
     case StateStartup:
       // Wait until started up
@@ -411,8 +416,92 @@ void ZehnderRF::loop(void) {
   }
 }
 
+// Is this frame an answer rather than something asked of the network? Decided
+// from the frame type, which is the only honest way round: the unit answers a
+// set-speed and a device query with the very same 0x07 FAN_SETTINGS frame, so
+// "what came back" cannot be told from "what was asked" -- but a reply frame
+// type is always a reply, whoever it is addressed to.
+static bool isAnswerFrame(const uint8_t command) {
+  switch (command) {
+    case FAN_FRAME_SETSPEED_REPLY:
+    case FAN_TYPE_FAN_SETTINGS:
+    case FAN_NETWORK_JOIN_ACK:
+    case FAN_FRAME_SETVOLTAGE_REPLY:
+      return true;
+    default:
+      return false;
+  }
+}
+
+void ZehnderRF::recordReceivedSender_(const void *pFrame) {
+  const RfFrame *const pRx = (const RfFrame *) pFrame;
+
+  if (isAnswerFrame(pRx->command)) {
+    this->last_ans_type_ = pRx->tx_type;
+    this->last_ans_id_ = pRx->tx_id;
+    this->last_ans_frame_ = pRx->command;
+    this->last_activity_ms_ = millis();
+    this->have_last_ans_ = true;
+    this->answer_trigger_.trigger();
+    return;
+  }
+
+  this->last_cmd_type_ = pRx->tx_type;
+  this->last_cmd_id_ = pRx->tx_id;
+  this->last_cmd_frame_ = pRx->command;
+  this->last_activity_ms_ = millis();
+  this->last_cmd_from_us_ = false;
+  this->have_last_cmd_ = true;
+  this->command_trigger_.trigger();
+}
+
+// Drop both records once the exchange stops being news, and say so, so the
+// entities clear themselves on time rather than being polled for a deadline known
+// here. Together, on one clock: a command and the answer it draws are
+// milliseconds apart, so clearing them separately would only ever mean one entity
+// blanking a tick before the other -- which reads as a glitch, not as detail.
+void ZehnderRF::expireSenders_(void) {
+  if (!this->have_last_cmd_ && !this->have_last_ans_) {
+    return;
+  }
+  if ((millis() - this->last_activity_ms_) < this->senderStaleMs_()) {
+    return;
+  }
+  this->have_last_cmd_ = false;
+  this->have_last_ans_ = false;
+  this->command_trigger_.trigger();
+  this->answer_trigger_.trigger();
+}
+
+// A text sensor has no way to go back to "unknown" on its own: publish_state()
+// always marks a state as present, and text_sensor (unlike sensor) has no
+// invalidate_state(). Clearing the flag and pushing the state ourselves is the
+// only route, and controller_registry.h may only be included from a .cpp --
+// hence this living here rather than in a YAML lambda.
+#ifdef USE_TEXT_SENSOR
+void ZehnderRF::clearTextSensor(text_sensor::TextSensor *pSensor) {
+  if ((pSensor == NULL) || !pSensor->has_state()) {
+    return;
+  }
+  pSensor->set_has_state(false);
+  ControllerRegistry::notify_text_sensor_update(pSensor);
+}
+#endif
+
 void ZehnderRF::rfHandleReceived(const uint8_t *const pData, const uint8_t dataLength) {
   this->logReceivedFrame(pData, dataLength);
+
+  // Remember who is talking, before any state-machine handling: this is the only
+  // place every frame passes through, and a frame the machine ignores (a remote
+  // talking to the unit, say) is exactly the one worth recording. Short frames
+  // are dropped, as the logger does -- their header cannot be trusted.
+  //
+  // The triggers this fires run here, in loop() context (nRF905::loop() ->
+  // onRxComplete), like any other automation -- so the diagnostics are current
+  // before this frame is even handled.
+  if (dataLength >= FAN_FRAMESIZE) {
+    this->recordReceivedSender_(pData);
+  }
 
   const RfFrame *const pResponse = (RfFrame *) pData;
   RfFrame *const pTxFrame = (RfFrame *) this->_txFrame;  // frame helper
@@ -1064,6 +1153,21 @@ Result ZehnderRF::startTransmit(const uint8_t *const pData, const int8_t rxRetri
     // ESP_LOGD(TAG, "Write payload");
     this->rf_->writeTxPayload(pData, FAN_FRAMESIZE);  // Use framesize
     this->logTransmittedFrame(pData, FAN_FRAMESIZE);
+
+    // What we send counts as a command as much as what a wall remote sends -- "who
+    // last commanded the fan" is the whole question, and half the time it is us.
+    // Our periodic query counts too: it is traffic on the air like any other, and
+    // the short staleness window keeps it from standing in for anything newer.
+    const uint8_t txCommand = ((const RfFrame *) pData)->command;
+    if (!isAnswerFrame(txCommand)) {
+      this->last_cmd_type_ = this->config_.fan_my_device_type;
+      this->last_cmd_id_ = this->config_.fan_my_device_id;
+      this->last_cmd_frame_ = txCommand;
+      this->last_activity_ms_ = millis();
+      this->last_cmd_from_us_ = true;
+      this->have_last_cmd_ = true;
+      this->command_trigger_.trigger();
+    }
     // }
 
     this->rfState_ = RfStateWaitAirwayFree;

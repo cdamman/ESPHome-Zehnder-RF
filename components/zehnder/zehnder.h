@@ -4,11 +4,17 @@
 #include <string>
 #include <vector>
 
+#include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 #include "esphome/core/hal.h"
 #include "esphome/components/spi/spi.h"
 #include "esphome/components/fan/fan.h"
 #include "esphome/components/nrf905/nRF905.h"
+// Only for clearTextSensor(): a config with no text sensor at all does not build
+// this component in, and neither of the CI configs has one.
+#ifdef USE_TEXT_SENSOR
+#include "esphome/components/text_sensor/text_sensor.h"
+#endif
 
 namespace esphome {
 namespace zehnder {
@@ -180,6 +186,68 @@ class ZehnderRF : public Component, public fan::Fan {
     return (this->queryAttempts_ == 0) ? 0.0f : (100.0f * (float) this->querySuccesses_ / (float) this->queryAttempts_);
   }
 
+  // --- Who is talking on this network --------------------------------------
+  // Two records, because they answer two different questions and one would
+  // drown the other: every command is answered by the unit within
+  // milliseconds, so a single "last frame" reading would say "the unit"
+  // essentially always and a wall remote press -- the thing worth seeing --
+  // would be invisible.
+  //
+  //   command: who last told the fan to do something. Another remote, this
+  //            controller (from Home Assistant), or the unit announcing
+  //            something on its own initiative.
+  //   answer:  who last answered. In practice the unit, replying either to us
+  //            or to another remote, which also makes it a "the link is alive"
+  //            reading.
+  //
+  // Queries count as commands, from us as much as from anyone: asking the unit
+  // for its settings is traffic, and the point here is to show what is on the
+  // air. The unit's reply to a query is an answer like any other.
+  //
+  // Both records go stale together after senderStaleMs_() -- half the polling
+  // interval, so 15 s at the default 30 s -- and then read as "nothing recently"
+  // (have*() false) rather than showing a sender from an hour ago as if it had
+  // just happened. Half an interval means this controller's own periodic query
+  // lands in an empty field every time rather than refreshing a value that was
+  // never allowed to lapse, so what you see happened *just now*.
+  //
+  // None of this is a signal-strength reading: the nRF905 has no RSSI, only a
+  // carrier-detect pin that trips somewhere around -95 dBm. This answers "who
+  // is talking", never "how well".
+  bool haveLastCommand(void) const { return this->senderFresh_(this->have_last_cmd_); }
+  uint8_t getLastCommandType(void) const { return this->last_cmd_type_; }
+  uint8_t getLastCommandId(void) const { return this->last_cmd_id_; }
+  uint8_t getLastCommandFrame(void) const { return this->last_cmd_frame_; }
+  // True when the last command was one we sent ourselves, rather than one we
+  // overheard. Its type/id are this controller's own.
+  bool isLastCommandFromUs(void) const { return this->last_cmd_from_us_; }
+  bool isLastCommandFromMainUnit(void) const {
+    return this->have_last_cmd_ && !this->last_cmd_from_us_ && this->isPairedUnit_(this->last_cmd_type_, this->last_cmd_id_);
+  }
+
+  bool haveLastAnswer(void) const { return this->senderFresh_(this->have_last_ans_); }
+  uint8_t getLastAnswerType(void) const { return this->last_ans_type_; }
+  uint8_t getLastAnswerId(void) const { return this->last_ans_id_; }
+  uint8_t getLastAnswerFrame(void) const { return this->last_ans_frame_; }
+  bool isLastAnswerFromMainUnit(void) const {
+    return this->have_last_ans_ && this->isPairedUnit_(this->last_ans_type_, this->last_ans_id_);
+  }
+
+  // Fire when the matching record changes -- a command seen or sent, an answer
+  // heard -- and both fire together when the records lapse, so the entities clear
+  // themselves on time instead of being polled for a deadline the component
+  // already knows. YAML hangs `on_command:` / `on_answer:` off these, the way the
+  // fan's own on_state refreshes the consumption sensors.
+  Trigger<> *get_command_trigger(void) { return &this->command_trigger_; }
+  Trigger<> *get_answer_trigger(void) { return &this->answer_trigger_; }
+
+  // Clearing a text sensor back to "unknown" needs a state push with no state,
+  // which text_sensor cannot express on its own; done here because it reaches
+  // into a header ESPHome only allows a .cpp to include.
+#ifdef USE_TEXT_SENSOR
+  static void clearTextSensor(text_sensor::TextSensor *pSensor);
+#endif
+
   // Live paired identity (from flash/discovery or a YAML pin), for diagnostic
   // sensors so the current pairing is visible in HA without a log capture.
   uint32_t getNetworkId(void) const { return this->config_.fan_networkId; }
@@ -220,6 +288,45 @@ class ZehnderRF : public Component, public fan::Fan {
   // the timer window, which also covers the fan's own timer expiring.
   uint8_t pre_boost_speed_{0};
   bool has_pre_boost_speed_{false};
+
+  // The two records behind haveLastCommand() / haveLastAnswer(). The command one
+  // also covers our own transmissions, hence from_us_ -- its type/id are then
+  // this controller's, which is not something a received frame could tell us.
+  uint8_t last_cmd_type_{0};
+  uint8_t last_cmd_id_{0};
+  uint8_t last_cmd_frame_{0};
+  bool last_cmd_from_us_{false};
+  bool have_last_cmd_{false};
+
+  uint8_t last_ans_type_{0};
+  uint8_t last_ans_id_{0};
+  uint8_t last_ans_frame_{0};
+  bool have_last_ans_{false};
+
+  // One clock for both records, not one each: an exchange is a command and the
+  // answer it draws, milliseconds apart, so two clocks would only ever differ by
+  // those milliseconds -- and a display where half an exchange has already gone
+  // unknown reads as a glitch. So both lapse together, on the newest of the two.
+  uint32_t last_activity_ms_{0};
+
+  // Half the polling interval: long enough that a query and the answer it draws
+  // are both on display, short enough that what is displayed is current. Tied to
+  // the interval rather than fixed so it still holds if the polling is retuned.
+  uint32_t senderStaleMs_(void) const { return this->interval_ / 2; }
+  bool senderFresh_(bool have) const {
+    return have && ((millis() - this->last_activity_ms_) < this->senderStaleMs_());
+  }
+  bool isPairedUnit_(uint8_t type, uint8_t id) const {
+    return (type == this->config_.fan_main_unit_type) && (id == this->config_.fan_main_unit_id);
+  }
+
+  // Sort a received frame into the two records above (or neither), and drop the
+  // stale ones. Both defined in the .cpp, next to RfFrame and the command bytes.
+  void recordReceivedSender_(const void *pFrame);
+  void expireSenders_(void);
+
+  Trigger<> command_trigger_;
+  Trigger<> answer_trigger_;
 
   uint8_t fan_flags_{0};    // flags byte of the last FAN_SETTINGS frame
   uint8_t fan_voltage_{0};  // percentage byte of the last FAN_SETTINGS frame
