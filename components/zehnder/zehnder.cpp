@@ -726,45 +726,54 @@ void ZehnderRF::rfHandleReceived(const uint8_t *const pData, const uint8_t dataL
       }
       break;
 
-    case StateIdle:
+    case StateIdle: {
       // The radio keeps receiving while idle, so unsolicited frames land here:
-      // the main unit broadcasting a new fan setting after another remote (or
-      // the unit's own buttons) changed the speed, plus mesh re-broadcasts of
-      // those frames. Decode the ones addressed to us and push the update
-      // straight to Home Assistant instead of waiting for the next poll.
-      if ((pResponse->rx_type == this->config_.fan_my_device_type) &&  // If type
-          (pResponse->rx_id == this->config_.fan_my_device_id)) {      // and id match, it is for us
-        switch (pResponse->command) {
-          case FAN_TYPE_FAN_SETTINGS: {
-            const uint8_t fanSpeed = pResponse->payload.fanSettings.speed;
-            ESP_LOGD(TAG, "Unsolicited fan settings; speed: 0x%02X voltage: %i flags: 0x%02X", fanSpeed,
-                     pResponse->payload.fanSettings.voltage, pResponse->payload.fanSettings.flags);
+      // another remote commanding the unit, the unit answering it, the unit's
+      // own buttons, plus mesh re-broadcasts of all of that. Decode what says
+      // something about the speed and push it straight to Home Assistant
+      // instead of waiting for the next poll.
+      //
+      // A 0x07 FAN_SETTINGS frame from the unit we are paired to is taken
+      // whoever it is addressed to. That is the key to picking up a wall remote
+      // without delay: the unit answers *every* command with its current
+      // settings (the protocol replies to 0x01, 0x02 and 0x10 with 0x07), and
+      // that answer is addressed to whoever asked -- so insisting on frames
+      // addressed to us would mean hearing the request and never the result.
+      // It is also the authoritative value, the unit's own account of what it
+      // is doing, where a request is only what someone asked for.
+      const bool fromPairedUnit = this->isPairedUnit_(pResponse->tx_type, pResponse->tx_id);
+      const bool forUs = (pResponse->rx_type == this->config_.fan_my_device_type) &&
+                         (pResponse->rx_id == this->config_.fan_my_device_id);
 
-            this->fan_voltage_ = pResponse->payload.fanSettings.voltage;
-            this->have_fan_settings_ = true;
-            this->updateTimerFromDevice_(pResponse->payload.fanSettings.flags);
+      if ((pResponse->command == FAN_TYPE_FAN_SETTINGS) && (fromPairedUnit || forUs)) {
+        const uint8_t fanSpeed = pResponse->payload.fanSettings.speed;
+        ESP_LOGD(TAG, "Unsolicited fan settings for 0x%02X:0x%02X; speed: 0x%02X voltage: %i flags: 0x%02X",
+                 pResponse->rx_type, pResponse->rx_id, fanSpeed, pResponse->payload.fanSettings.voltage,
+                 pResponse->payload.fanSettings.flags);
 
-            // Only publish on an actual change; mesh re-broadcasts repeat the
-            // same values and would otherwise spam Home Assistant. on/off and
-            // the mode both follow the speed, so the speed is the whole test.
-            if (this->speed != fanSpeed) {
-              this->publishFanState_(fanSpeed);
-            }
-            break;
-          }
+        this->fan_voltage_ = pResponse->payload.fanSettings.voltage;
+        this->have_fan_settings_ = true;
+        this->updateTimerFromDevice_(pResponse->payload.fanSettings.flags);
 
-          default:
-            ESP_LOGD(TAG, "Received unhandled frame while idle; type 0x%02X from ID 0x%02X", pResponse->command,
-                     pResponse->tx_id);
-            break;
+        // Only publish on an actual change; mesh re-broadcasts repeat the same
+        // values and would otherwise spam Home Assistant. on/off and the mode
+        // both follow the speed, so the speed is the whole test.
+        if (this->speed != fanSpeed) {
+          this->publishFanState_(fanSpeed);
         }
-      } else if (pResponse->rx_type == this->config_.fan_main_unit_type) {
-        // Frames addressed to the main unit are commands from *other* remotes
-        // (or apps/sensors) changing the fan. We only hear these because the
-        // radio now listens continuously while idle. Decode the requested speed
-        // and reflect it in Home Assistant immediately, instead of waiting for
-        // the next poll. (These are requests, not confirmations; the next poll
-        // reconciles with the main unit's actual reported state.)
+      } else if (forUs) {
+        ESP_LOGD(TAG, "Received unhandled frame while idle; type 0x%02X from ID 0x%02X", pResponse->command,
+                 pResponse->tx_id);
+      } else if ((pResponse->rx_type == this->config_.fan_main_unit_type) ||
+                 (pResponse->rx_type == FAN_TYPE_BROADCAST)) {
+        // Frames addressed to the main unit -- or to the whole network, which is
+        // how some remotes send -- are commands from *other* remotes (or
+        // apps/sensors) changing the fan. We only hear these because the radio
+        // listens continuously while idle. Decode the requested speed and
+        // reflect it in Home Assistant immediately rather than waiting for the
+        // next poll. These are requests, not confirmations: the unit's 0x07
+        // answer handled above is what settles it a few milliseconds later, and
+        // the next poll reconciles anything neither of them caught.
         uint8_t requestedSpeed;
         bool haveSpeed = true;
         switch (pResponse->command) {
@@ -798,6 +807,7 @@ void ZehnderRF::rfHandleReceived(const uint8_t *const pData, const uint8_t dataL
       }
       // Any other frames were already recorded by logReceivedFrame() above.
       break;
+    }
 
     default:
       ESP_LOGD(TAG, "Received frame from unknown device in unknown state; type 0x%02X from ID 0x%02X type 0x%02X",

@@ -32,7 +32,13 @@ default; the committed `utility-bridge-d1-mini.yaml` selects French, being the
 author's own unit.
 
 Changes made from a physical remote show up immediately: the radio listens
-continuously and also decodes the frames addressed to the unit.
+continuously, and takes both halves of what it hears — the command a wall remote
+sends, and the unit's own settings frame answering it, whoever that answer is
+addressed to. The second is what makes this reliable: the unit answers *every*
+command with its current settings, so a remote whose command we cannot read (a
+raw voltage rather than a preset, say) still moves the entity within
+milliseconds. See [RF diagnostics](#rf-diagnostics-and-the-rssi-that-does-not-exist)
+for watching this happen.
 
 ## Language
 
