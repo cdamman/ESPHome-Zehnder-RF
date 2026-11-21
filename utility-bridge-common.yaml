@@ -194,6 +194,23 @@ number:
   # sensors below derive it from these -- which is why they are settable from
   # Home Assistant (the integration had them in its options) rather than baked
   # into the firmware. Kept across restarts.
+  #
+  # Each one puts itself back to the configured default if it ever comes up as 0
+  # or unset. A stored value can be lost -- a flash write that did not land, a
+  # preference key that no longer matches after an ESPHome upgrade -- and 0 is the
+  # worst possible replacement: it is inside the allowed range, so nothing
+  # complains, and "Current consumption" then reads a confident 0 W while the fan
+  # runs, taking the daily energy total down with it. Silence for days, from a
+  # value that looks like a measurement.
+  #
+  # A running VMC never draws 0 W, so 0 here means the figure is gone, not that
+  # someone meant it. If you really do want a speed to count as nothing, set the
+  # substitution instead (`power_low: "0"` in your own config): the default
+  # becomes 0 and this check then has nothing to restore.
+  #
+  # on_value fires for the value restored at boot too, which is what makes this a
+  # repair rather than a validation; setting the number re-runs it once with the
+  # new value, which fails the test and stops there.
   - platform: template
     name: "${name_power_low}"
     id: ${devicename}_power_low
@@ -209,6 +226,17 @@ number:
     optimistic: true
     restore_value: true
     on_value:
+      - if:
+          condition:
+            lambda: "return std::isnan(x) || x <= 0.0f;"
+          then:
+            - logger.log:
+                level: WARN
+                format: "Power figure for low speed came up as %.1f W; restoring the configured ${power_low} W"
+                args: ["x"]
+            - number.set:
+                id: ${devicename}_power_low
+                value: ${power_low}
       - component.update: ${devicename}_power
 
   - platform: template
@@ -226,6 +254,17 @@ number:
     optimistic: true
     restore_value: true
     on_value:
+      - if:
+          condition:
+            lambda: "return std::isnan(x) || x <= 0.0f;"
+          then:
+            - logger.log:
+                level: WARN
+                format: "Power figure for medium speed came up as %.1f W; restoring the configured ${power_medium} W"
+                args: ["x"]
+            - number.set:
+                id: ${devicename}_power_medium
+                value: ${power_medium}
       - component.update: ${devicename}_power
 
   - platform: template
@@ -243,6 +282,17 @@ number:
     optimistic: true
     restore_value: true
     on_value:
+      - if:
+          condition:
+            lambda: "return std::isnan(x) || x <= 0.0f;"
+          then:
+            - logger.log:
+                level: WARN
+                format: "Power figure for high speed came up as %.1f W; restoring the configured ${power_high} W"
+                args: ["x"]
+            - number.set:
+                id: ${devicename}_power_high
+                value: ${power_high}
       - component.update: ${devicename}_power
 
   # How long a set of filters lasts, in days -- 90 for the usual three months. A

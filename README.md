@@ -15,7 +15,7 @@ integration, which goes through the
 | `number` **Timer duration** | Boost duration, 1 to 240 min, kept across restarts |
 | `sensor` **Timer remaining** | Count-down, in minutes, of the running boost |
 | `sensor` **Current consumption** / **Consumption today** | Power derived from the speed, and daily energy reset at midnight |
-| `number` **Power 1-3** | Watts drawn at each speed, set from Home Assistant and kept across restarts |
+| `number` **Power 1-3** | Watts drawn at each speed, set from Home Assistant and kept across restarts — a figure that comes up as 0 is treated as lost and put back to the configured default, see [below](#when-a-power-figure-goes-missing) |
 | `sensor` **Airflow** | Unit output in %, as the unit itself reports it |
 | `button` **Re-pair** | Re-runs the join handshake, for a unit whose pairing window is open |
 | `text_sensor` **RF Com: Last command** / **Sent by** / **RF Resp: Last answer** / **Received from** | The last command and the last answer, each split into what (*Set speed (0x02)*) and who (*Remote (0x06)*); all four go back to unknown after half a polling interval (diagnostic). No RSSI: the nRF905 cannot measure one, see [RF diagnostics](#rf-diagnostics-and-the-rssi-that-does-not-exist) |
@@ -396,6 +396,34 @@ component never asks for: the schema refuses it and `setSpeed()` clamps to 3. A
 unit that reports it anyway -- someone pressed max on a physical remote -- is
 reported faithfully, matches no named mode, and its consumption falls back to the
 *3 - High* figure rather than stall the daily total.
+
+### When a power figure goes missing
+
+The unit reports no consumption of its own, so **Current consumption** is derived
+from the three **Power** numbers — and those are stored in flash, which means they
+can be lost: a write that did not land, or a preference key that no longer matches
+after an ESPHome upgrade.
+
+Losing one used to be invisible. The replacement value was **0**, which is inside
+the allowed range, so nothing complained: *Current consumption* read a confident
+`0 W` while the fan ran, and **Consumption today** quietly stopped counting with
+it. A reading that looks like a measurement is worse than no reading at all.
+
+A running VMC never draws 0 W, so 0 there means the figure is gone rather than
+intended. Each of the three numbers now puts itself back to its configured default
+when it comes up as 0 or unset, and says so once in the log:
+
+```
+[W][main]: Power figure for low speed came up as 0.0 W; restoring the configured 13.0 W
+```
+
+It works on the value restored at boot, because `on_value` fires for that too, so
+the repair happens before anything reads it. Setting the number re-runs the check
+once with the new value, which fails the test and stops there.
+
+If you genuinely want a speed to count as nothing, set the substitution rather
+than the entity — `power_low: "0"` in your own config makes 0 the default, and the
+check then has nothing to restore.
 
 ## Filter change reminder
 
