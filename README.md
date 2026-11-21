@@ -405,7 +405,6 @@ Four entities, no automation required for any of it to work:
 | --- | --- |
 | `number` **Filter interval** | How long a set of filters lasts, in days — 90 by default (the usual three months), and the deadline moves as soon as you change it |
 | `sensor` **Filter change due on** | When they are next due. Home Assistant renders a timestamp as *3 November*, and as *in 2 months* on the cards that show relative time (diagnostic) |
-| `sensor` **Filter life** | Share of the interval left, 100 % → 0 %, shaped as a battery so it lands on the Maintenance dashboard — with the consequences that carries, see [below](#about-the-maintenance-section) (diagnostic) |
 | `binary_sensor` **Filter status** | `device_class: problem`, so its value reads *Problem* / *OK* and Home Assistant shows it as something wrong with the device. Filed under *Diagnostic*, which does not stop an automation from watching it |
 | `button` **Filters changed** | Press it after changing them: today becomes the new reference date and the deadline moves out by one interval. Filed under *Configuration* on the device page, with the other buttons |
 
@@ -424,10 +423,10 @@ config — though the number entity is the place to change it once it is running
 Four things worth knowing:
 
 - **Changing something updates it at once.** Pressing **Filters changed** or moving
-  **Filter interval** republishes the due date and **Filter life** immediately
-  (`component.update`), rather than leaving them on their last polled value for up
-  to a minute. **Filter status** needs no such nudge — a template binary sensor
-  re-evaluates every loop, so it clears within milliseconds.
+  **Filter interval** republishes the due date immediately (`component.update`),
+  rather than leaving it on its last polled value for up to a minute. **Filter
+  status** needs no such nudge — a template binary sensor re-evaluates every loop,
+  so it clears within milliseconds.
 - **It needs a clock.** `time:` lives in your per-install config (both committed
   ones declare `id: homeassistant_time`, which is the id the common config reads).
   Until Home Assistant has connected once, every entity above reads *unknown*
@@ -504,48 +503,39 @@ before pasting.
 
 ### About the "maintenance section"
 
-There are two different things by that name, and this entity reaches neither of
-them on its own.
+**Filter status** is what shows there. Home Assistant's Maintenance summary
+(*Overview → Summaries*) now surfaces `problem` entities, so the filter alarm
+lands on it with no help from this config: `device_class: problem` is already
+what the entity carries, and it is also what makes the device page say something
+is wrong.
 
-There is no maintenance **entity category**: Home Assistant has exactly three —
-primary (none), `config` and `diagnostic`. One was proposed for precisely this
-kind of entity and the architecture team
+That was not always true, and the repository carried a workaround for it. When
+the Maintenance dashboard arrived in
+[2026.5](https://www.home-assistant.io/blog/2026/05/06/release-20265/) it
+"focuse[d] on what is probably the most-requested view of all: your batteries",
+and collected numeric battery-percentage sensors only — not `problem` binary
+sensors, not even binary *battery* ones, which was
+[an open complaint](https://github.com/home-assistant/frontend/issues/51905). The
+only way in was to dress the filter life up as a battery percentage, which this
+config did with a **Filter life** sensor carrying a deliberate
+`device_class: battery`. The cost was that Home Assistant then believed it *was*
+a battery: battery cards, low-battery automations and the device's battery
+indicator all picked it up. Now that the summary reads the honest entity, the
+phantom battery is deleted rather than kept around.
+
+If you are upgrading, that entity does not disappear from Home Assistant on its
+own — ESPHome stops offering it, and the registry keeps it as *unavailable* until
+you remove it (the device page's ⋮ → *Delete* on the entity, or **Reconfigure**
+on the device).
+
+There is still no maintenance **entity category**: Home Assistant has exactly
+three — primary (none), `config` and `diagnostic`. One was proposed for precisely
+this kind of entity and the architecture team
 [closed the proposal](https://github.com/home-assistant/architecture/discussions/1016).
 
-There *is* a built-in **Maintenance dashboard**, added in
-[2026.5](https://www.home-assistant.io/blog/2026/05/06/release-20265/) and
-reachable under *Overview → Summaries*. It will not show this sensor either: it
-"focuses on what is probably the most-requested view of all: your batteries",
-and collects numeric battery-percentage sensors. Not `problem` binary sensors —
-not even binary *battery* ones, which is
-[an open complaint](https://github.com/home-assistant/frontend/issues/51905).
-No `device_class` or `entity_category` puts a `problem` sensor on that card. The
-only way in is to dress the filter life up as a battery percentage — so that is
-what **Filter life** does:
+Two more places to put it, if the summary and the device page are not where you
+look:
 
-- it reports the share of the interval left, 100 % the day the filters are
-  changed and 0 % on the deadline, so on the Maintenance dashboard the filters
-  sit next to the real batteries and drain towards empty as the deadline comes;
-- the cost is that Home Assistant then believes it **is** a battery: battery
-  cards, low-battery automations and the device's battery indicator all pick it
-  up. It ships enabled anyway — a maintenance reading you have to go and switch
-  on is not much of a maintenance reading — so if a phantom battery is worse for
-  you than the dashboard entry is worth, drop it from your own config:
-
-  ```yaml
-  sensor:
-    - id: !remove zehnder_fan_filter_life
-  ```
-
-- it is `diagnostic`, where real battery sensors live. If it fails to show up on
-  the dashboard, set `filter_life_entity_category: ""` in your own config to make
-  it a primary entity instead.
-
-The other options, which stay honest about what the thing is:
-
-- **`device_class: problem`**, which is what **Filter status** already
-  uses. It is Home Assistant's own way of saying "this device needs attention",
-  and it shows on the device page without any configuration.
 - **A to-do list**, if you want it to sit in a list of chores rather than in a
   notification. Add to the first automation:
 
